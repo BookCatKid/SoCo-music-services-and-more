@@ -1316,6 +1316,10 @@ class TestRenderingControl:
 
         moco.deviceProperties.GetZoneInfo.assert_called_with()
 
+        moco.deviceProperties.GetZoneInfo.return_value = {"HTAudioIn": "118489148"}
+        assert moco.soundbar_audio_input_format_code == 118489148
+        assert moco.soundbar_audio_input_format == "Dolby TrueHD 7.1"
+
         moco.deviceProperties.GetZoneInfo.return_value = {"HTAudioIn": "12345"}
         assert "Unknown audio input format: 12345" in moco.soundbar_audio_input_format
 

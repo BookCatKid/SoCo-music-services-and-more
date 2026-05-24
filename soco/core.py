@@ -79,6 +79,7 @@ AUDIO_INPUT_FORMATS = {
     84934721: "DTS 5.1",
     118489090: "Multichannel PCM 7.1",
     118489146: "Dolby Digital Plus 7.1",
+    118489148: "Dolby TrueHD 7.1",
 }
 
 _LOG = logging.getLogger(__name__)
