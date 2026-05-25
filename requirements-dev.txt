@@ -1,6 +1,8 @@
 sphinx == 5.0.2
 sphinx_rtd_theme
 pytest >= 2.5
+pytest-asyncio
+aiohttp
 graphviz
 flake8
 pylint
