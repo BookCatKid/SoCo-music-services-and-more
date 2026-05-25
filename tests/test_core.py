@@ -1530,6 +1530,7 @@ class TestDeviceProperties:
         Creates a SoCo object for the slave (RH) speaker, and
         checks for the correct call with the correct parameters.
         """
+        moco._uid = "RINCON_000XXX1400"
         moco2 = mock.Mock()
         moco2.uid = "RINCON_000XXY1400"
         moco.create_stereo_pair(moco2)
@@ -1569,6 +1570,7 @@ class TestDeviceProperties:
     def test_separate_satellite_speakers(self, moco):
         """Test separate_satellite_speakers calls RemoveHTSatellite for each satellite."""
         moco._is_soundbar = True
+        moco._uid = "RINCON_000XXX1400"
 
         sat1 = mock.Mock()
         sat1.uid = "RINCON_SAT1_1400"

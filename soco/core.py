@@ -3032,6 +3032,17 @@ class SoCo(_SocoSingletonBase):
         return battery_info
 
 
+def soco_reset():
+    """Reset the SoCo module.
+
+    Clears out the singleton instance cache. Use this to reset SoCo state,
+    for example when testing. Note that this does not close any open
+    connections or release other resources. This function is not thread-safe
+    and must not be called while the API is in use from other threads.
+    """
+    _ArgsSingleton._instances.clear()
+
+
 # definition section
 
 RADIO_STATIONS = 0

@@ -1,5 +1,6 @@
 """Tests for the SoCoSingletonBase and _ArgsSingleton classes in core."""
 
+from soco import soco_reset
 from soco.core import _SocoSingletonBase as Base
 
 
@@ -48,3 +49,11 @@ def test_class_group_singleton():
     assert ThirdSingleton("aa") is FourthSingleton("aa")
     assert ThirdSingleton("aa") is not FourthSingleton("bb")
     assert ThirdSingleton("aa") is not ASingleton("aa")
+
+
+def test_soco_reset_clears_instances():
+    """Check that soco_reset() causes fresh singleton instances."""
+    instance_before = ASingleton("aa")
+    soco_reset()
+    instance_after = ASingleton("aa")
+    assert instance_before is not instance_after

@@ -11,9 +11,18 @@ from unittest import mock
 
 import pytest
 from soco import SoCo
+from soco import soco_reset
 
 IP_ADDR = "192.168.1.101"
 THISDIR = path.dirname(path.abspath(__file__))
+
+
+@pytest.fixture(autouse=True)
+def reset_soco():
+    """Reset the singletons between tests to prevent state leakage."""
+    soco_reset()
+    yield
+    soco_reset()
 
 
 @pytest.fixture()
