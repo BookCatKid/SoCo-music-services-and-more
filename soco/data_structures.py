@@ -73,6 +73,8 @@ def to_didl_string(*args):
 
 def didl_class_to_soco_class(didl_class):
     """Translate a DIDL-Lite class to the corresponding SoCo data structures class"""
+    if didl_class is None:
+        raise DIDLMetadataError("DIDL class is None")
     # Certain music services have been observed to sub-class via a .# or # syntax.
     # We simply remove these subclasses.
     for separator in (".#", "#"):
