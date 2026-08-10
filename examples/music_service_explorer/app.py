@@ -237,10 +237,17 @@ def _browser_search(name, category, term, variant, index, count, account=None):
 # Feature: browse (get_metadata)
 # ---------------------------------------------------------------------------
 
-def _legacy_browse(name, item_id, index, count, recursive):
+def _legacy_browse(
+    name, item_id, index, count, recursive, sort_order=None, sort_ascending=None
+):
     service = _get_service(name)
     result = service.get_metadata(
-        item_id, index=index, count=count, recursive=recursive
+        item_id,
+        index=index,
+        count=count,
+        recursive=recursive,
+        sort_order=sort_order,
+        sort_ascending=sort_ascending,
     )
     return {
         "items": [
@@ -259,13 +266,22 @@ def _legacy_browse(name, item_id, index, count, recursive):
     }
 
 
-def _browser_browse(name, item_id, index, count, recursive, account=None):
+def _browser_browse(
+    name, item_id, index, count, recursive, sort_order, sort_ascending, account=None
+):
     browser = _get_browser(name, account=account)
     # Content-session children must be handed back to SMAPI with the account's
     # OAuth device identity. The browser only does that when it receives a
     # MusicServiceBrowseItem with a content source_transport, so rebuild the
     # wrapper from the transport the frontend carried over.
     transport = request.args.get("transport", "")
+    kwargs = {
+        "index": index,
+        "count": count,
+        "recursive": recursive,
+        "sort_order": sort_order,
+        "sort_ascending": sort_ascending,
+    }
     if transport in ("content", "content-section"):
         item = MusicServiceBrowseItem(
             item_id,
@@ -273,13 +289,9 @@ def _browser_browse(name, item_id, index, count, recursive, account=None):
             "mediaCollection",
             source_transport=transport,
         )
-        result = browser.get_metadata(
-            item, index=index, count=count, recursive=recursive
-        )
+        result = browser.get_metadata(item, **kwargs)
     else:
-        result = browser.get_metadata(
-            item_id, index=index, count=count, recursive=recursive
-        )
+        result = browser.get_metadata(item_id, **kwargs)
     return {
         "items": [
             {
@@ -310,6 +322,37 @@ def _legacy_media_metadata(name, item_id):
 def _browser_media_metadata(name, item_id, account=None):
     browser = _get_browser(name, account=account)
     return {"metadata": browser.get_media_metadata(item_id)}
+
+
+def _browser_extended_metadata(name, item_id, account=None):
+    browser = _get_browser(name, account=account)
+    data = browser.get_extended_metadata(item_id)
+    return {
+        "items": [
+            {
+                "id": item.item_id,
+                "title": item.title,
+                "type": item.item_type,
+                "artist": item.artist,
+                "can_browse": item.can_browse,
+            }
+            for item in data["items"]
+        ],
+        "text": data["text"],
+    }
+
+
+def _browser_media_uri(name, item_id, account=None):
+    browser = _get_browser(name, account=account)
+    return {
+        "media_uri": browser.get_media_uri(item_id),
+        "sonos_uri": browser.sonos_uri_from_id(item_id),
+    }
+
+
+def _browser_last_update(name, account=None):
+    browser = _get_browser(name, account=account)
+    return {"last_update": browser.get_last_update()}
 
 
 # ---------------------------------------------------------------------------
@@ -462,12 +505,27 @@ def api_browse():
     index = int(request.args.get("index", 0))
     count = int(request.args.get("count", 20))
     recursive = request.args.get("recursive", "0") == "1"
+    sort_order = request.args.get("sort_order", "") or None
+    sort_ascending = None
+    if sort_order and request.args.get("sort_ascending", "") != "":
+        sort_ascending = request.args.get("sort_ascending") == "1"
     account = _account_from_request(name)
     try:
         if api == "browser":
-            data = _browser_browse(name, item_id, index, count, recursive, account)
+            data = _browser_browse(
+                name,
+                item_id,
+                index,
+                count,
+                recursive,
+                sort_order,
+                sort_ascending,
+                account,
+            )
         else:
-            data = _legacy_browse(name, item_id, index, count, recursive)
+            data = _legacy_browse(
+                name, item_id, index, count, recursive, sort_order, sort_ascending
+            )
         return jsonify(data)
     except Exception as error:  # pylint: disable=broad-except
         return jsonify({"error": str(error)}), 500
@@ -491,6 +549,41 @@ def api_metadata():
         # the shared client; the legacy path is the reliable fallback here.
         payload = {"error": str(error), "hint": "try the legacy API"}
         return jsonify(payload), 401
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/extended-metadata")
+def api_extended_metadata():
+    """get_extended_metadata for one item (related items + text)."""
+    name = request.args.get("service", "")
+    item_id = request.args.get("item", "")
+    account = _account_from_request(name)
+    try:
+        return jsonify(_browser_extended_metadata(name, item_id, account))
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/media-uri")
+def api_media_uri():
+    """get_media_uri + sonos_uri_from_id for one item (browser API)."""
+    name = request.args.get("service", "")
+    item_id = request.args.get("item", "")
+    account = _account_from_request(name)
+    try:
+        return jsonify(_browser_media_uri(name, item_id, account))
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/last-update")
+def api_last_update():
+    """get_last_update for one service (browser API)."""
+    name = request.args.get("service", "")
+    account = _account_from_request(name)
+    try:
+        return jsonify(_browser_last_update(name, account))
     except Exception as error:  # pylint: disable=broad-except
         return jsonify({"error": str(error)}), 500
 

@@ -207,11 +207,15 @@
         <div class="tab" data-tab="search" onclick="switchTab('search')">🔍 Search</div>
         <div class="tab" data-tab="browse" onclick="switchTab('browse')">📂 Browse</div>
         <div class="tab" data-tab="metadata" onclick="switchTab('metadata')">🏷️ Item metadata</div>
+        <div class="tab" data-tab="extended" onclick="switchTab('extended')">🧬 Extended metadata</div>
+        <div class="tab" data-tab="uris" onclick="switchTab('uris')">🔗 Stream URIs</div>
       </div>
       <div id="tab-info"></div>
       <div id="tab-search" class="hidden"></div>
       <div id="tab-browse" class="hidden"></div>
       <div id="tab-metadata" class="hidden"></div>
+      <div id="tab-extended" class="hidden"></div>
+      <div id="tab-uris" class="hidden"></div>
     </div>
     {% endif %}
   </main>
@@ -259,12 +263,14 @@ function selectService(el) {
 function switchTab(name) {
   state.tab = name;
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-  ["info", "search", "browse", "metadata"].forEach(t =>
+  ["info", "search", "browse", "metadata", "extended", "uris"].forEach(t =>
     document.getElementById("tab-" + t).classList.toggle("hidden", t !== name));
   if (name === "info") loadInfo();
   if (name === "search") loadSearch();
   if (name === "browse") loadBrowse();
   if (name === "metadata") loadMetadataForm();
+  if (name === "extended") loadExtendedForm();
+  if (name === "uris") loadUrisForm();
 }
 
 function snippet(title, code) {
@@ -295,6 +301,13 @@ async function loadInfo() {
         <div class="kv">${variantHtml || '<div class="v muted">No search categories advertised</div>'}</div>
         <p class="hint">Variants scope the same category differently (e.g. Apple Music: whole catalog vs. your library).</p>
         ${snippet("MusicService search surface", `service = MusicService("${state.service}", device=soco)\nservice.available_search_categories      # ['artists', 'albums', ...]\nservice.available_search_variants        # {'artists': ['SearchTitle', 'LibrarySearchTitle'], ...}\nservice.desc                             # sonos descriptor for DIDL metadata\nservice.sonos_uri_from_id('artist:44984')# soco://… URI for queueing (never queued here!)`)}
+      </div>
+      <div class="panel">
+        <h3>Last update <code>MusicServiceBrowser.get_last_update()</code></h3>
+        <div class="row">
+          <button class="secondary" onclick="loadLastUpdate()">Fetch change timestamps</button>
+        </div>
+        <div id="lu-result" class="hint">catalog/favorites change timestamps — useful for cache invalidation.</div>
       </div>`;
   } catch (e) { el.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
 }
@@ -427,10 +440,19 @@ async function loadBrowse() {
         </select>
         <select id="b-account" class="hidden"></select>
         <label class="muted"><input type="checkbox" id="b-rec"> recursive</label>
+        <select id="b-sort" title="Provider sort key (not all containers support sorting)">
+          <option value="">no sort</option>
+          <option>Artist</option>
+          <option>Album</option>
+          <option>DateAdded</option>
+          <option>TrackNumber</option>
+          <option>Name</option>
+        </select>
+        <label class="muted"><input type="checkbox" id="b-asc" checked> ascending</label>
         <button class="secondary" onclick="loadBrowseRoot()">Browse root</button>
       </div>
       <div class="crumb hidden" id="b-crumb"></div>
-      <div class="hint" id="b-hint">Browse the service's root container, then click into any container.</div>
+      <div class="hint" id="b-hint">Browse the service's root container, then click into any container. The sort dropdown forwards sortOrder to providers that support it.</div>
     </div>
     <div id="b-results"></div>`;
   loadAccounts("b-account");
@@ -453,6 +475,8 @@ async function fetchBrowse(id, page, transport) {
   const box = document.getElementById("b-results");
   const apiSel = document.getElementById("b-api").value;
   const recursive = document.getElementById("b-rec").checked ? "1" : "0";
+  const sortOrder = document.getElementById("b-sort").value;
+  const sortAsc = document.getElementById("b-asc").checked ? "1" : "0";
   const accountSel = document.getElementById("b-account");
   const account = accountSel && !accountSel.classList.contains("hidden") ? accountSel.value : "";
   state.browsePage = page;
@@ -461,6 +485,7 @@ async function fetchBrowse(id, page, transport) {
     const data = await api(`/api/browse?service=${encodeURIComponent(state.service)}` +
       `&item=${encodeURIComponent(id)}&transport=${encodeURIComponent(transport || "")}` +
       `&api=${apiSel}&index=${page * 20}&count=20&recursive=${recursive}` +
+      (sortOrder ? `&sort_order=${encodeURIComponent(sortOrder)}&sort_ascending=${sortAsc}` : "") +
       (account ? `&account=${encodeURIComponent(account)}` : ""));
     const crumb = document.getElementById("b-crumb");
     if (state.browseStack.length) {
@@ -543,6 +568,95 @@ async function runMetadata() {
         ? `<div class="msg warn">Some token-based providers reject metadata calls through the browser client — switch the API dropdown to “MusicService (old)” and try again.</div>`
         : "");
   }
+}
+
+/* ---------------- Extended metadata ---------------- */
+async function loadExtendedForm() {
+  const el = document.getElementById("tab-extended");
+  el.innerHTML = `
+    <div class="panel">
+      <h3>Extended metadata <code>MusicServiceBrowser.get_extended_metadata()</code></h3>
+      <div class="row">
+        <input id="x-item" placeholder="item id, e.g. artist:44984" style="flex:1; min-width:220px">
+        <button onclick="runExtended()">Fetch</button>
+      </div>
+      <p class="hint">Related items (e.g. an artist's radio) and text fields (bios, notes) for one item. Browser API only.</p>
+    </div>
+    <div id="x-results"></div>`;
+}
+
+async function runExtended() {
+  const id = document.getElementById("x-item").value.trim();
+  if (!id) return;
+  const box = document.getElementById("x-results");
+  box.innerHTML = '<div class="msg"><span class="spinner"></span> Fetching…</div>';
+  try {
+    const data = await api(`/api/extended-metadata?service=${encodeURIComponent(state.service)}` +
+      `&item=${encodeURIComponent(id)}`);
+    const items = (data.items || []).map(it => `
+      <div class="card" data-id="${esc(it.id)}">
+        <div class="title">${esc(it.title) || "(untitled)"}</div>
+        <div class="sub">${esc(it.artist || "")}</div>
+        <div class="tags">${badge(it.type || "item")}${it.can_browse ? badge("📂 container") : ""}</div>
+      </div>`).join("");
+    const texts = (data.text || []).map(t =>
+      `<div class="kv"><div class="k">${esc(t.type)}</div><div class="v">${esc(String(t.text).slice(0, 400))}</div></div>`).join("");
+    box.innerHTML = `
+      <div class="msg ok">${items ? `${data.items.length} related items` : "No related items"}</div>
+      <div class="grid" id="x-grid">${items || ""}</div>
+      ${texts ? `<div class="panel"><h3>Text fields</h3><div class="kv">${texts}</div></div>` : ""}`;
+    const grid = document.getElementById("x-grid");
+    if (grid) grid.onclick = (ev) => {
+      const card = ev.target.closest(".card");
+      if (card) fillMetadata(card.dataset.id);
+    };
+  } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Stream URIs ---------------- */
+async function loadUrisForm() {
+  const el = document.getElementById("tab-uris");
+  el.innerHTML = `
+    <div class="panel">
+      <h3>Stream URIs <code>get_media_uri() / sonos_uri_from_id()</code></h3>
+      <div class="row">
+        <input id="u-item" placeholder="item id (station ids work best)" style="flex:1; min-width:220px">
+        <button onclick="runUris()">Fetch</button>
+      </div>
+      <p class="hint">get_media_uri returns the provider's stream URL (radio services). sonos_uri_from_id builds the queueable soco:// URI. No playback here — copy only!</p>
+    </div>
+    <div id="u-results"></div>`;
+}
+
+async function runUris() {
+  const id = document.getElementById("u-item").value.trim();
+  if (!id) return;
+  const box = document.getElementById("u-results");
+  box.innerHTML = '<div class="msg"><span class="spinner"></span> Fetching…</div>';
+  try {
+    const data = await api(`/api/media-uri?service=${encodeURIComponent(state.service)}` +
+      `&item=${encodeURIComponent(id)}`);
+    box.innerHTML = `
+      <div class="panel">
+        <h3>media_uri</h3>
+        <pre>${esc(data.media_uri || "(none — on-demand services resolve streams player-side)")}</pre>
+      </div>
+      <div class="panel">
+        <h3>sonos_uri_from_id</h3>
+        <pre>${esc(data.sonos_uri || "(none)")}</pre>
+      </div>`;
+  } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Last update ---------------- */
+async function loadLastUpdate() {
+  const box = document.getElementById("lu-result");
+  if (!box) return;
+  box.innerHTML = '<span class="spinner"></span> Fetching…';
+  try {
+    const data = await api(`/api/last-update?service=${encodeURIComponent(state.service)}`);
+    box.innerHTML = `<pre>${esc(JSON.stringify(data.last_update, null, 2))}</pre>`;
+  } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
 }
 </script>
 </body>
