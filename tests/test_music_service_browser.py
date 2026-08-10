@@ -625,6 +625,25 @@ def test_malformed_sonos_radio_xsi_prefix_is_repaired():
     assert client.get_metadata()["count"] == 2
 
 
+def test_plain_text_unauthorized_is_an_auth_fault_not_malformed_xml():
+    # Sonos Radio answers with the literal text ``Unauthorized`` (HTTP 200)
+    # when the token it is given is unusable.
+    session = FakeSession(post_responses=[FakeResponse(content=b"Unauthorized")])
+    client = browser._ConfiguredSmapiClient(
+        FakeService(),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=session,
+    )
+
+    with pytest.raises(MusicServiceAuthException, match="Unauthorized"):
+        client.get_metadata()
+
+
 def test_multiple_configured_accounts_require_explicit_selection(monkeypatch):
     service = FakeService()
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)

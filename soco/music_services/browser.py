@@ -692,18 +692,14 @@ class _ConfiguredSmapiClient:
                     count=1,
                 )
             if repaired == payload:
-                raise MusicServiceException(
-                    "{} returned malformed SMAPI XML".format(
-                        self.music_service.service_name
-                    )
+                raise self._non_xml_response_error(
+                    payload, response.status_code
                 ) from error
             try:
                 root = XML.fromstring(repaired)
             except XML.ParseError as repaired_error:
-                raise MusicServiceException(
-                    "{} returned malformed SMAPI XML".format(
-                        self.music_service.service_name
-                    )
+                raise self._non_xml_response_error(
+                    payload, response.status_code
                 ) from repaired_error
 
         faults = _children(root, "Fault")
@@ -733,7 +729,24 @@ class _ConfiguredSmapiClient:
             or "invalidtoken" in combined
             or "tokenrefreshrequired" in combined
             or "token expired" in combined
+            or "unauthorized" in combined
             or fault.http_status == 401
+        )
+
+    def _non_xml_response_error(self, payload, status_code):
+        """Return the right exception for a response that is not XML.
+
+        A few providers answer with plain text instead of a SOAP envelope;
+        Sonos Radio, for example, responds ``Unauthorized`` when the token it
+        was given is not usable.  Surfacing that as an auth-flavored fault
+        gives a truthful error and lets the credential-refresh flow run.
+        """
+        stripped = payload.strip()
+        if stripped and not stripped.startswith(b"<"):
+            text = stripped.decode("utf-8", "replace")[:200]
+            return _BrowseSoapFault("HTTP", text, status_code)
+        return MusicServiceException(
+            "{} returned malformed SMAPI XML".format(self.music_service.service_name)
         )
 
     @staticmethod
@@ -995,6 +1008,7 @@ class _BrowseSoapFault(Exception):
         if (
             "token" in combined
             or "authorization" in combined
+            or "unauthorized" in combined
             or self.http_status == 401
         ):
             return MusicServiceAuthException(str(self))
