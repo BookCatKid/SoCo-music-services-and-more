@@ -64,6 +64,17 @@ class ConfiguredMusicServiceAccount:
         )
 
     @property
+    def keyless(self):
+        """bool: True for empty-key records (no username, token, or key).
+
+        Such records are stored by the player with an unmanaged
+        ``SA_RINCON<type>_`` UDN: RemoveAccount and SetAccountNicknameX
+        reject them (observed UPnP errors 806 and 402), so management actions
+        should be withheld for them.
+        """
+        return not self.username and not self.token and not self.key
+
+    @property
     def account_uid(self):
         """int: The account UID encoded in the Sonos account UDN.
 
@@ -265,6 +276,68 @@ def _aes_128_cbc_decrypt(ciphertext, key, iv):
     if padded[-padding_length:] != padding:
         raise MusicServiceException("Invalid PKCS#7 padding in account payload")
     return padded[:-padding_length]
+
+
+def _aes_128_cbc_encrypt(plaintext, key, iv):
+    """Encrypt a value for the Sonos account envelope without a hard dependency.
+
+    ``cryptography`` is preferred when the caller already has it installed.
+    It cannot be made an unconditional SoCo dependency without dropping some
+    of SoCo's currently supported Python versions, so OpenSSL remains a
+    fallback. PKCS#7 padding is applied explicitly because the decrypt side
+    validates (rather than removes) padding.
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError:
+        openssl = shutil.which("openssl")
+        if not openssl:
+            raise MusicServiceException(
+                "Managing configured music-service accounts requires either "
+                "the 'cryptography' package or an OpenSSL executable"
+            )
+        result = subprocess.run(
+            [
+                openssl,
+                "enc",
+                "-aes-128-cbc",
+                "-K",
+                key.hex(),
+                "-iv",
+                iv.hex(),
+            ],
+            input=plaintext,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise MusicServiceException("AES-CBC encryption failed")
+        return result.stdout
+
+    padding_length = 16 - (len(plaintext) % 16)
+    padded = plaintext + bytes([padding_length]) * padding_length
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
+
+
+def _encrypt_account_payload(plaintext, household_id):
+    """Wrap a plaintext value in the household ``2:`` account envelope.
+
+    The exact inverse of :func:`_decrypt_account_payload`: the plaintext is
+    suffixed with the first four bytes of its MD5 digest, PKCS#7 padded,
+    encrypted with AES-128-CBC under the household-derived key, and prefixed
+    with ``2:`` plus base64(iv + ciphertext). The official controller wraps
+    every account value it sends to SystemProperties (AccountUDN, nickname,
+    etc.) in this envelope; plaintext values are rejected by the player with
+    UPnP error 402.
+    """
+    body = plaintext + hashlib.md5(plaintext).digest()[:4]
+    iv = os.urandom(16)
+    global_key = hashlib.md5(household_id.encode("utf-8") + _ACCOUNT_SALT).digest()
+    blob_key = hashlib.md5(iv + global_key).digest()
+    ciphertext = _aes_128_cbc_encrypt(body, blob_key, iv)
+    return "2:" + base64.b64encode(iv + ciphertext).decode("ascii")
 
 
 def _account_content_device_id(household_id, account):

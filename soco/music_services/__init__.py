@@ -11,6 +11,13 @@ from .browser import (
     MusicServiceBrowser,
     PresentationMap,
 )
+from .onboarding import (
+    AccountLink,
+    AddedAccount,
+    DeviceAuthCredential,
+    MusicServiceAccountManager,
+    account_type,
+)
 
 __all__ = [
     "MusicService",
@@ -20,4 +27,9 @@ __all__ = [
     "MusicServiceBrowseResult",
     "MusicServiceBrowser",
     "PresentationMap",
+    "AccountLink",
+    "AddedAccount",
+    "DeviceAuthCredential",
+    "MusicServiceAccountManager",
+    "account_type",
 ]

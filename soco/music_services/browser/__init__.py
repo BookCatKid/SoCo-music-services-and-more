@@ -40,7 +40,9 @@ from .credentials import (  # noqa: F401
     _ACCOUNT_SALT,
     _capture_account_event,
     _decrypt_account_payload,
+    _encrypt_account_payload,
     _aes_128_cbc_decrypt,
+    _aes_128_cbc_encrypt,
 )
 from .transport import _BrowseSoapFault  # noqa: F401
 from .util import (  # noqa: F401
