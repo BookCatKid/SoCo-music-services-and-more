@@ -314,8 +314,8 @@ async function loadSearch() {
         <h3>Search <code>MusicService.search() / MusicServiceBrowser.search()</code></h3>
         <div class="row">
           <select id="s-api">
-            <option value="browser">MusicServiceBrowser (account-aware)</option>
-            <option value="legacy">MusicService (legacy, token store)</option>
+            <option value="browser">MusicServiceBrowser (new) — household accounts</option>
+            <option value="legacy">MusicService (old) — token store</option>
           </select>
           <select id="s-account" class="hidden"></select>
           <select id="s-cat"><option value="">— category —</option>
@@ -422,8 +422,8 @@ async function loadBrowse() {
       <h3>Browse <code>get_metadata()</code></h3>
       <div class="row">
         <select id="b-api">
-          <option value="browser">MusicServiceBrowser</option>
-          <option value="legacy">MusicService</option>
+          <option value="browser">MusicServiceBrowser (new)</option>
+          <option value="legacy">MusicService (old)</option>
         </select>
         <select id="b-account" class="hidden"></select>
         <label class="muted"><input type="checkbox" id="b-rec"> recursive</label>
@@ -509,8 +509,8 @@ async function loadMetadataForm() {
       <h3>Item metadata <code>get_media_metadata() / get_extended_metadata()</code></h3>
       <div class="row">
         <select id="m-api">
-          <option value="browser">MusicServiceBrowser</option>
-          <option value="legacy">MusicService</option>
+          <option value="browser">MusicServiceBrowser (new)</option>
+          <option value="legacy">MusicService (old)</option>
         </select>
         <input id="m-item" placeholder="item id, e.g. artist:44984" style="flex:1; min-width:220px">
         <button onclick="runMetadata()">Fetch</button>
@@ -540,7 +540,7 @@ async function runMetadata() {
   } catch (e) {
     box.innerHTML = `<div class="msg err">${esc(e.message)}</div>` +
       (e.message && e.message.includes("Auth")
-        ? `<div class="msg warn">Some token-based providers reject metadata calls through the browser client — switch the API dropdown to “MusicService (legacy)” and try again.</div>`
+        ? `<div class="msg warn">Some token-based providers reject metadata calls through the browser client — switch the API dropdown to “MusicService (old)” and try again.</div>`
         : "");
   }
 }
