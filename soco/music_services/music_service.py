@@ -609,37 +609,38 @@ class MusicService:
                 return service
         raise MusicServiceException("Unknown music service: '%s'" % service_name)
 
-    def _get_search_prefix_map(self):
-        """Fetch and parse the service search category mapping.
+    def _get_search_variants(self):
+        """Fetch and parse the service search categories, keeping every variant.
 
-        Standard Sonos search categories are 'all', 'artists', 'albums',
-        'tracks', 'playlists', 'genres', 'stations', 'tags'. Not all are
-        available for each music service
+        A presentation map may declare several ``<SearchCategories>`` blocks
+        for the same logical category, each scoping the search differently.
+        Apple Music, for example, declares ``SearchTitle`` (the whole catalog)
+        and ``LibrarySearchTitle`` (only the user's saved library) with
+        distinct mapped ids (``artist`` vs ``libraryartist``).
+
+        Returns:
+            dict: Each key is a search category (eg ``'artists'``) and each
+            value is a list of ``(variant, mapped_id)`` pairs, ordered as they
+            appear in the presentation map. Standard Sonos search categories
+            include 'all', 'artists', 'albums', 'tracks', 'playlists',
+            'genres', 'stations', 'tags', but services may add custom ones.
         """
-        # TuneIn does not have a pmap. Its search keys are is search:station,
-        # search:show, search:host
-
-        # Presentation maps can also define custom categories. See eg
-        # http://sonos-pmap.ws.sonos.com/hypemachine_pmap.6.xml
-        # <SearchCategories>
-        # ...
-        #     <CustomCategory mappedId="SBLG" stringId="Blogs"/>
-        # </SearchCategories>
         # Is it already cached? If so, return it
         if self._search_prefix_map is not None:
             return self._search_prefix_map
         # Not cached. Fetch and parse presentation map
         self._search_prefix_map = {}
-        # Tunein is a special case. It has no pmap, but supports searching
+        # TuneIn does not have a pmap. Its search keys are is search:station,
+        # search:show, search:host
         if self.service_name == "TuneIn":
             self._search_prefix_map = {
-                "stations": "search:station",
-                "shows": "search:show",
-                "hosts": "search:host",
+                "stations": [("default", "search:station")],
+                "shows": [("default", "search:show")],
+                "hosts": [("default", "search:host")],
             }
             return self._search_prefix_map
 
-        # Certain music services delivers the presentation map not in an
+        # Certain music services deliver the presentation map not in an
         # information field of its own, but in a JSON 'manifest'. Get it
         # and extract the needed values.
         if (
@@ -658,22 +659,78 @@ class MusicService:
         log.debug("Fetching presentation map from %s", self.presentation_map_uri)
         pmap = requests.get(self.presentation_map_uri, timeout=9)
         pmap_root = XML.fromstring(pmap.content)
-        # Search translations can appear in Category or CustomCategory elements
-        categories = pmap_root.findall(".//SearchCategories/Category")
-        if categories is None:
-            return self._search_prefix_map
-        for category in categories:
-            # The latter part `or cat.get("id")` is added as a workaround for a
-            # Navidrome + bonob setup, where the category ids are delivered on this key
-            # instead of `mappedId` like for most other services. Reference:
-            # https://github.com/SoCo/SoCo/pull/869#issuecomment-991353397
-            self._search_prefix_map[category.get("id")] = category.get(
-                "mappedId"
-            ) or category.get("id")
-        custom_categories = pmap_root.findall(".//SearchCategories/CustomCategory")
-        for category in custom_categories:
-            self._search_prefix_map[category.get("stringId")] = category.get("mappedId")
+        # Presentation maps can also define custom categories. See eg
+        # http://sonos-pmap.ws.sonos.com/hypemachine_pmap.6.xml
+        # <SearchCategories>
+        # ...
+        #     <CustomCategory mappedId="SBLG" stringId="Blogs"/>
+        # </SearchCategories>
+        # Search translations can appear in Category or CustomCategory elements.
+        # Each SearchCategories block is one variant (its stringId names it,
+        # eg 'SearchTitle' for the catalog and 'LibrarySearchTitle' for the
+        # user's library). Entries for the same category across blocks are all
+        # preserved so callers can choose which variant to search.
+        for block in pmap_root.findall(".//SearchCategories"):
+            variant = block.get("stringId", "default")
+            for category in block.findall(".//Category"):
+                # The latter part `or cat.get("id")` is added as a workaround
+                # for a Navidrome + bonob setup, where the category ids are
+                # delivered on this key instead of `mappedId` like for most
+                # other services. Reference:
+                # https://github.com/SoCo/SoCo/pull/869#issuecomment-991353397
+                mapped_id = category.get("mappedId") or category.get("id")
+                self._search_prefix_map.setdefault(category.get("id"), []).append(
+                    (variant, mapped_id)
+                )
+            for category in block.findall(".//CustomCategory"):
+                self._search_prefix_map.setdefault(category.get("stringId"), []).append(
+                    (variant, category.get("mappedId"))
+                )
         return self._search_prefix_map
+
+    def _get_search_prefix_map(self):
+        """Fetch and parse the service search category mapping.
+
+        Standard Sonos search categories are 'all', 'artists', 'albums',
+        'tracks', 'playlists', 'genres', 'stations', 'tags'. Not all are
+        available for each music service.
+
+        Returns:
+            dict: The category-to-prefix mapping, using the first (default)
+            variant of each category. Use :meth:`_get_search_variants` for all
+            variants, or :meth:`available_search_variants` for their names.
+        """
+        # Fetch and parse the variants, then pick the default one per category
+        variants = self._get_search_variants()
+        return {
+            category: mapped_id
+            for category, entries in variants.items()
+            for _variant, mapped_id in (entries or [("", "")])[:1]
+        }
+
+    @property
+    def available_search_variants(self):
+        """dict: Every search variant offered per category.
+
+        Some services scope a search category in more than one way. Apple
+        Music, for example, offers ``'SearchTitle'`` (the whole catalog) and
+        ``'LibrarySearchTitle'`` (the user's saved library) for the same
+        categories. This maps each category to its list of variant names:
+
+        >>> print(apple_music.available_search_variants)
+        {'artists': ['SearchTitle', 'LibrarySearchTitle'], ...}
+
+        Services with a single search mode map each category to ``['default']``.
+
+        These names are accepted as the ``variant`` argument of
+        :meth:`MusicService.search` and
+        :meth:`MusicServiceBrowser.search` (with ``'all'`` searching every
+        variant at once).
+        """
+        return {
+            category: [variant for variant, _mapped in entries]
+            for category, entries in self._get_search_variants().items()
+        }
 
     @property
     def available_search_categories(self):
@@ -875,7 +932,7 @@ class MusicService:
         )
         return parse_response(self, response, "browse")
 
-    def search(self, category, term="", index=0, count=100):
+    def search(self, category, term="", index=0, count=100, variant=None):
         """Search for an item in a category.
 
         Args:
@@ -887,31 +944,77 @@ class MusicService:
             term (str): The term to search for.
             index (int): The starting index. Default 0.
             count (int): The maximum number of items to return. Default 100.
+            variant (str): Which search variant to use, or ``'all'`` to search
+                every variant the service offers and merge the results. When
+                omitted, the service's default (first) variant is searched,
+                matching the pre-variant behavior. See
+                :attr:`available_search_variants` for the variant names a
+                service supports.
 
         Returns:
-            ~collections.OrderedDict: The search results, or `None`.
+            SearchResult: The search results.
 
         See also:
             The Sonos `search API <http://musicpartners.sonos.com/node/86>`_
         """
-        search_category = self._get_search_prefix_map().get(category, None)
-        if search_category is None:
+        search_variants = self._get_search_variants().get(category, None)
+        if search_variants is None:
             raise MusicServiceException(
                 "%s does not support the '%s' search category"
                 % (self.service_name, category)
             )
 
-        response = self.soap_client.call(
-            "search",
-            [
-                ("id", search_category),
-                ("term", term),
-                ("index", index),
-                ("count", count),
-            ],
-        )
+        if variant is None:
+            # Backwards-compatible default: search only the first (default)
+            # variant, exactly as before variants existed.
+            search_variants = search_variants[:1]
 
-        return parse_response(self, response, category)
+        if variant not in (None, "all"):
+            search_variants = [
+                entry for entry in search_variants if entry[0] == variant
+            ]
+            if not search_variants:
+                raise MusicServiceException(
+                    "%s does not offer the '%s' search variant for '%s'; "
+                    "available variants: %s"
+                    % (
+                        self.service_name,
+                        variant,
+                        category,
+                        ", ".join(
+                            entry[0] for entry in self._get_search_variants()[category]
+                        ),
+                    )
+                )
+
+        results = []
+        total_matches = 0
+        for _variant, search_category in search_variants:
+            response = self.soap_client.call(
+                "search",
+                [
+                    ("id", search_category),
+                    ("term", term),
+                    ("index", index),
+                    ("count", count),
+                ],
+            )
+            result = parse_response(self, response, category)
+            results.append(result)
+            if result.total_matches is not None:
+                total_matches += result.total_matches
+
+        if len(results) == 1:
+            return results[0]
+
+        merged = results[0].__class__(
+            [item for result in results for item in result],
+            category,
+            sum(result.number_returned for result in results),
+            total_matches or None,
+            results[0].update_id,
+        )
+        return merged
 
     def get_media_metadata(self, item_id):
         """Get metadata for a media item.

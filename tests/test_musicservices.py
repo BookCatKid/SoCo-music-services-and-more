@@ -265,6 +265,164 @@ def test_tunein():
     assert tunein.service_type == "65031"
 
 
+PMAP_WITH_VARIANTS = """<?xml version="1.0" ?>
+<Presentation>
+  <PresentationMap type="Search">
+    <Match>
+      <SearchCategories stringId="SearchTitle">
+        <Category id="artists" mappedId="artist"/>
+        <Category id="albums" mappedId="album"/>
+      </SearchCategories>
+      <SearchCategories stringId="LibrarySearchTitle">
+        <Category id="artists" mappedId="libraryartist"/>
+        <Category id="albums" mappedId="libraryalbum"/>
+      </SearchCategories>
+    </Match>
+  </PresentationMap>
+</Presentation>
+"""
+
+MANIFEST_WITH_PMAP = (
+    """{"presentationMap": {"uri": "https://cf.ws.sonos.com/p/p/mock"}}"""
+)
+
+
+def _apple_music_service(monkeypatch):
+    """Build a MusicService backed by Apple-style manifest+pmap data."""
+    # The class-level services cache may have been populated by other tests
+    MusicService._music_services_data = None
+    monkeypatch.setattr(
+        MusicService,
+        "_get_music_services_data",
+        classmethod(
+            lambda cls: {
+                "52231": {
+                    "Name": "Apple Music",
+                    "Id": "204",
+                    "ServiceType": "52231",
+                    "Uri": "https://apple.invalid/smapi",
+                    "SecureUri": "https://apple.invalid/smapi",
+                    "Capabilities": "0",
+                    "Version": "1.1",
+                    "ContainerType": "MService",
+                    "Auth": "AppLink",
+                    "PresentationMapUri": None,
+                    "ManifestUri": "https://cf.ws.sonos.com/p/m/mock",
+                }
+            }
+        ),
+    )
+
+    def fake_get(url, timeout=9):
+        if url == "https://cf.ws.sonos.com/p/m/mock":
+            return mock.Mock(content=MANIFEST_WITH_PMAP.encode("utf-8"))
+        if url == "https://cf.ws.sonos.com/p/p/mock":
+            return mock.Mock(content=PMAP_WITH_VARIANTS.encode("utf-8"))
+        raise AssertionError("unexpected request to {}".format(url))
+
+    monkeypatch.setattr(soco.music_services.music_service.requests, "get", fake_get)
+    return MusicService("Apple Music")
+
+
+def test_search_variants_keep_every_pmap_block(monkeypatch):
+    apple = _apple_music_service(monkeypatch)
+
+    variants = apple._get_search_variants()
+
+    assert variants == {
+        "artists": [
+            ("SearchTitle", "artist"),
+            ("LibrarySearchTitle", "libraryartist"),
+        ],
+        "albums": [
+            ("SearchTitle", "album"),
+            ("LibrarySearchTitle", "libraryalbum"),
+        ],
+    }
+    assert apple.available_search_variants == {
+        "artists": ["SearchTitle", "LibrarySearchTitle"],
+        "albums": ["SearchTitle", "LibrarySearchTitle"],
+    }
+    # The default prefix map uses the first (catalog) variant, not the last
+    assert apple._get_search_prefix_map() == {
+        "artists": "artist",
+        "albums": "album",
+    }
+
+
+def test_search_combines_all_variants(monkeypatch):
+    apple = _apple_music_service(monkeypatch)
+
+    def fake_call(method, parameters=None):
+        parameters = parameters or []
+        search_id = dict(parameters)["id"]
+        item_id = "artist:1" if search_id == "artist" else "artist:9"
+        return {
+            "searchResult": {
+                "count": 1,
+                "mediaCollection": [
+                    {"id": item_id, "itemType": "artist", "title": "Artist"}
+                ],
+            }
+        }
+
+    apple.soap_client.call = fake_call
+
+    result = apple.search("artists", "miles", variant="all")
+
+    assert len(result) == 2
+    assert result[0].item_id.endswith("artist%3A1")
+    assert result[1].item_id.endswith("artist%3A9")
+    assert result.number_returned == 2
+
+
+def test_search_defaults_to_first_variant(monkeypatch):
+    apple = _apple_music_service(monkeypatch)
+
+    def fake_call(method, parameters=None):
+        search_id = dict(parameters or [])["id"]
+        # The default search must use the first (catalog) variant only
+        assert search_id == "artist"
+        return {
+            "searchResult": {
+                "count": 1,
+                "mediaCollection": [
+                    {"id": "artist:1", "itemType": "artist", "title": "Artist"}
+                ],
+            }
+        }
+
+    apple.soap_client.call = fake_call
+
+    result = apple.search("artists", "miles")
+
+    assert len(result) == 1
+    assert result[0].item_id.endswith("artist%3A1")
+
+
+def test_search_single_variant(monkeypatch):
+    apple = _apple_music_service(monkeypatch)
+
+    def fake_call(method, parameters=None):
+        search_id = dict(parameters or [])["id"]
+        assert search_id == "libraryartist"
+        return {
+            "searchResult": {
+                "count": 1,
+                "mediaCollection": [
+                    {"id": "artist:9", "itemType": "artist", "title": "Artist"}
+                ],
+            }
+        }
+
+    apple.soap_client.call = fake_call
+
+    result = apple.search("artists", "miles", variant="LibrarySearchTitle")
+
+    assert len(result) == 1
+    assert result[0].item_id.endswith("artist%3A9")
+
+
 def test_search():
     spotify = MusicService("Spotify")
     # Set up dummy search categories

@@ -464,6 +464,7 @@ class MusicServiceBrowseItem:
         source_transport="smapi",
         section="",
         display_type="",
+        variant="",
         raw=None,
     ):
         self.item_id = item_id
@@ -476,6 +477,7 @@ class MusicServiceBrowseItem:
         self.source_transport = source_transport
         self.section = section
         self.display_type = display_type
+        self.variant = variant
         self.raw = raw or {}
 
     def __repr__(self):
@@ -1412,17 +1414,7 @@ class MusicServiceBrowser:
         if object_id in ("", "root") and self._content_endpoint:
             return self._content_root()
 
-        client = self._client
-        if from_content_page:
-            # Content-session objects are handed to SMAPI with the account's
-            # OAuth device identity as loginToken.householdId. Returning to the
-            # bare household ID makes Apple accept /browse/v1 but reject Library
-            # children as InvalidTokenException.
-            client = self._make_client(
-                _account_content_device_id(self.device.household_id, self.account)
-            )
-            client.session_id = self._client.session_id
-
+        client = self._scoped_client(from_content_page)
         try:
             page = client.get_metadata(object_id, index, count, recursive)
         finally:
@@ -1440,27 +1432,84 @@ class MusicServiceBrowser:
             raw=page,
         )
 
-    def search(self, category, term="", index=0, count=100):
-        """Search the service with the existing MusicService category mapping."""
+    def _scoped_client(self, force_scoped=False):
+        """Return the SMAPI client for the account's OAuth device identity.
+
+        SMAPI requests identify the account through ``loginToken.householdId``.
+        The desktop controller sends the account-scoped content device identity
+        here, not the bare household ID: providers such as Apple reject SMAPI
+        calls made under the plain household identity with
+        ``InvalidTokenException`` even though their content home page accepts
+        it.  Content-session objects are always handed back to SMAPI scoped;
+        search is likewise scoped whenever the account carries a UDN.  The
+        shared client is returned for anonymous services, which send no token.
+        """
+        if force_scoped or self.account.udn:
+            return self._make_client(
+                _account_content_device_id(self.device.household_id, self.account)
+            )
+        return self._client
+
+    def search(self, category, term="", index=0, count=100, variant="all"):
+        """Search the service with the existing MusicService category mapping.
+
+        Args:
+            category (str): The search category (eg ``'artists'``). See
+                :attr:`MusicService.available_search_categories`.
+            term (str): The term to search for.
+            index (int): The starting index. Default 0.
+            count (int): The maximum number of items to return. Default 100.
+            variant (str): Which search variant to use, or ``'all'`` (the
+                default) to search every variant and merge the results.
+                Available variants are listed per category by
+                :attr:`MusicService.available_search_variants`.
+        """
         # Reuse the existing MusicService presentation-map parser rather than
         # maintaining a second search-category implementation here.
         # pylint: disable=protected-access
-        prefix_map = self.music_service._get_search_prefix_map()
+        variants = self.music_service._get_search_variants().get(category)
         # pylint: enable=protected-access
-        if category not in prefix_map:
+        if variants is None:
+            categories = ", ".join(
+                sorted(self.music_service.available_search_categories)
+            )
             raise MusicServiceException(
                 "Unknown search category {!r}; available categories: {}".format(
-                    category, ", ".join(sorted(prefix_map))
+                    category, categories
                 )
             )
-        page = self._client.search(prefix_map[category], term, index, count)
+        if variant != "all":
+            variants = [entry for entry in variants if entry[0] == variant]
+            if not variants:
+                available = self.music_service.available_search_variants.get(
+                    category, []
+                )
+                raise MusicServiceException(
+                    "Unknown search variant {!r} for {!r}; "
+                    "available variants: {}".format(
+                        variant, category, ", ".join(sorted(available))
+                    )
+                )
+
+        client = self._scoped_client()
+        merged_items = []
+        total = 0
+        raw = []
+        for _variant, mapped_id in variants:
+            page = client.search(mapped_id, term, index, count)
+            for record in page["items"]:
+                item = _legacy_item(record)
+                item.variant = _variant
+                merged_items.append(item)
+            total += page["total"]
+            raw.append(page)
         return MusicServiceBrowseResult(
-            [_legacy_item(record) for record in page["items"]],
-            index=page["index"],
-            total=page["total"],
+            merged_items,
+            index=index,
+            total=total,
             transport="smapi",
-            requested_id=prefix_map[category],
-            raw=page,
+            requested_id=category,
+            raw=raw,
         )
 
     def get_media_metadata(self, item):

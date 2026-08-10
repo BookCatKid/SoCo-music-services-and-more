@@ -133,6 +133,7 @@ class FakeService:
         auth_type="AppLink",
         capabilities="0",
         manifest_uri=None,
+        search_variants=None,
     ):
         self.service_name = name
         self.service_id = service_id
@@ -140,14 +141,29 @@ class FakeService:
         self.capabilities = capabilities
         self.manifest_uri = manifest_uri
         self.secure_uri = "https://example.invalid/smapi"
-        self.search_map = {"tracks": "search:track"}
+        if search_variants is None:
+            search_variants = {"tracks": [("default", "search:track")]}
+        self.search_variants = search_variants
+
+    def _get_search_variants(self):
+        return self.search_variants
 
     def _get_search_prefix_map(self):
-        return self.search_map
+        return {
+            category: entries[0][1]
+            for category, entries in self.search_variants.items()
+        }
 
     @property
     def available_search_categories(self):
-        return list(self.search_map)
+        return list(self.search_variants)
+
+    @property
+    def available_search_variants(self):
+        return {
+            category: [entry[0] for entry in entries]
+            for category, entries in self.search_variants.items()
+        }
 
 
 class FakeSystemProperties:
@@ -473,6 +489,108 @@ def test_search_uses_existing_music_service_category_map(monkeypatch):
     envelope = XML.fromstring(request["data"])
     assert browser._children(envelope, "id")[0].text == "search:track"
     assert browser._children(envelope, "term")[0].text == "hello"
+    # Search runs under the account's OAuth device identity, not the bare
+    # household ID: Apple rejects SMAPI calls under the plain household
+    # identity with InvalidTokenException.
+    assert browser._children(envelope, "householdId")[0].text == (
+        "Sonos_household_00abcdef"
+    )
+
+
+def test_search_combines_all_variants_and_labels_items(monkeypatch):
+    catalog_response = SEARCH_RESPONSE.replace(b"track:1", b"track:1")
+    library_response = SEARCH_RESPONSE.replace(b"track:1", b"track:9")
+    session = FakeSession(
+        post_responses=[
+            FakeResponse(content=catalog_response),
+            FakeResponse(content=library_response),
+        ]
+    )
+    service = FakeService(
+        search_variants={
+            "tracks": [
+                ("SearchTitle", "search:track"),
+                ("LibrarySearchTitle", "librarytrack"),
+            ]
+        }
+    )
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    result = music_browser.search("tracks", "hello")
+
+    assert [item.item_id for item in result.items] == ["track:1", "track:9"]
+    assert result.total == 2
+    assert result.items[0].variant == "SearchTitle"
+    assert result.items[1].variant == "LibrarySearchTitle"
+    # Both variant searches run under the account-scoped identity
+    assert len(session.post_calls) == 2
+    for _url, request in session.post_calls:
+        envelope = XML.fromstring(request["data"])
+        assert browser._children(envelope, "householdId")[0].text == (
+            "Sonos_household_00abcdef"
+        )
+    _url, first = session.post_calls[0]
+    _url, second = session.post_calls[1]
+    first_envelope = XML.fromstring(first["data"])
+    second_envelope = XML.fromstring(second["data"])
+    assert browser._children(first_envelope, "id")[0].text == "search:track"
+    assert browser._children(second_envelope, "id")[0].text == "librarytrack"
+
+
+def test_search_single_variant_only(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SEARCH_RESPONSE)])
+    service = FakeService(
+        search_variants={
+            "tracks": [
+                ("SearchTitle", "search:track"),
+                ("LibrarySearchTitle", "librarytrack"),
+            ]
+        }
+    )
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    result = music_browser.search("tracks", "hello", variant="LibrarySearchTitle")
+
+    assert result.items[0].item_id == "track:1"
+    assert result.items[0].variant == "LibrarySearchTitle"
+    assert len(session.post_calls) == 1
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "id")[0].text == "librarytrack"
+
+
+def test_search_unknown_variant_raises(monkeypatch):
+    session = FakeSession()
+    service = FakeService(search_variants={"tracks": [("SearchTitle", "search:track")]})
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    with pytest.raises(MusicServiceException, match="Unknown search variant"):
+        music_browser.search("tracks", "hello", variant="nope")
+
+
+def test_anonymous_search_uses_shared_household_client(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SEARCH_RESPONSE)])
+    service = FakeService(auth_type="Anonymous")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser("Example", device=FakeDevice(), session=session)
+
+    result = music_browser.search("tracks", "hello")
+
+    assert result.items[0].item_id == "track:1"
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    # Anonymous services carry no token, so no account-scoped householdId is
+    # sent; the search runs through the shared plain client.
+    assert not browser._children(envelope, "householdId")
 
 
 def test_get_media_metadata_is_read_only(monkeypatch):
