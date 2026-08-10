@@ -48,9 +48,14 @@ def _service_manifest(music_service, session):
     return manifest
 
 
-def _content_endpoint(music_service, session, endpoint_type="browse"):
-    """Return a manifest content endpoint of the requested type."""
-    manifest = _service_manifest(music_service, session)
+def _content_endpoint(music_service, session, endpoint_type="browse", manifest=None):
+    """Return a manifest content endpoint of the requested type.
+
+    ``manifest`` may be passed when it has already been fetched (and cached)
+    by the caller; otherwise it is downloaded here.
+    """
+    if manifest is None:
+        manifest = _service_manifest(music_service, session)
     for endpoint_value in _as_list(manifest.get("endpoints")):
         endpoint = _as_mapping(endpoint_value)
         if endpoint.get("type") != endpoint_type:

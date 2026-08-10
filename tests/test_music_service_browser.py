@@ -133,6 +133,7 @@ class FakeService:
         auth_type="AppLink",
         capabilities="0",
         manifest_uri=None,
+        presentation_map_uri=None,
         search_variants=None,
     ):
         self.service_name = name
@@ -144,7 +145,7 @@ class FakeService:
         self.container_type = "MusicService"
         self.uri = "http://example.invalid/smapi"
         self.secure_uri = "https://example.invalid/smapi"
-        self.presentation_map_uri = None
+        self.presentation_map_uri = presentation_map_uri
         self.manifest_uri = manifest_uri
         if search_variants is None:
             search_variants = {"tracks": [("default", "search:track")]}
@@ -1075,3 +1076,234 @@ def test_content_http_401_does_not_refresh_by_default(monkeypatch):
         music_browser.get_metadata()
 
     assert len(session.get_calls) == 2
+
+
+PMAP_XML = b"""\
+<Presentation>
+    <BrowseOptions PageSize="100"/>
+    <PresentationMap type="ArtWorkSizeMap">
+        <Match><imageSizeMap>
+            <sizeEntry size="40" substitution="40x40"/>
+            <sizeEntry size="200" substitution="200x200"/>
+        </imageSizeMap></Match>
+    </PresentationMap>
+    <PresentationMap type="BrowseIconSizeMap">
+        <Match><browseIconSizeMap>
+            <sizeEntry size="40" substitution="-40.png"/>
+            <sizeEntry size="0" substitution="-legacy.png"/>
+        </browseIconSizeMap></Match>
+    </PresentationMap>
+    <PresentationMap type="DisplayType">
+        <RootNodeDisplayType><DisplayMode>BRAND</DisplayMode></RootNodeDisplayType>
+        <DisplayType id="AlbumView">
+            <Lines>
+                <Line token="title"/>
+                <Line token="artist"/>
+                <Line token="summary"/>
+            </Lines>
+        </DisplayType>
+        <DisplayType id="GridView"><DisplayMode>GRID</DisplayMode></DisplayType>
+        <DisplayType id="TitleWithArtist">
+            <Lines><Line token="title"/><Line stringId="Artist_And_Album"/></Lines>
+            <ItemThumbnails source="albumArtUri"/>
+        </DisplayType>
+    </PresentationMap>
+    <PresentationMap type="InfoView">
+        <Match><MenuItemOverrides>
+            <MenuItem StringId="StartStation" MenuItem="RelatedPlay"
+                      PromptStringId="StartStation_PROMPT"/>
+        </MenuItemOverrides></Match>
+    </PresentationMap>
+    <PresentationMap type="Search">
+        <Match>
+            <SearchCategories stringId="SearchTitle">
+                <Category id="artists" mappedId="artist"/>
+                <Category id="tracks" mappedId="song"/>
+                <CustomCategory stringId="radioShows" mappedId="radioshow"/>
+            </SearchCategories>
+            <SearchCategories stringId="LibrarySearchTitle">
+                <Category id="artists" mappedId="libraryartist"/>
+            </SearchCategories>
+        </Match>
+    </PresentationMap>
+    <PresentationMap type="StreamQualityBadgeDictionary">
+        <StreamQualityBadgeDictionary>
+            <QualityBadgeMap id="16bit" text="Lossless"/>
+        </StreamQualityBadgeDictionary>
+    </PresentationMap>
+</Presentation>
+"""
+
+
+def test_get_manifest_returns_parsed_json_and_caches(monkeypatch):
+    manifest = {
+        "endpoints": [
+            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
+        ],
+        "presentationMap": {
+            "uri": "https://content.invalid/pmap.xml",
+            "version": 484,
+        },
+    }
+    session = FakeSession(get_responses=[FakeResponse(json_value=manifest)])
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    assert music_browser.get_manifest() == manifest
+    assert music_browser.manifest_data == manifest
+    assert music_browser.root_transport == "content"
+    # The manifest is fetched once during construction and cached afterwards.
+    assert len(session.get_calls) == 1
+
+
+def test_get_manifest_empty_without_manifest_uri(monkeypatch):
+    session = FakeSession()
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    assert music_browser.get_manifest() == {}
+    assert music_browser.manifest_data == {}
+    assert len(session.get_calls) == 0
+
+
+def test_get_presentation_map_parses_all_blocks(monkeypatch):
+    manifest = {
+        "endpoints": [
+            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
+        ],
+        "presentationMap": {
+            "uri": "https://content.invalid/pmap.xml",
+            "version": 484,
+        },
+    }
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(json_value=manifest),
+            FakeResponse(content=PMAP_XML),
+        ]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    pmap = music_browser.get_presentation_map()
+
+    assert isinstance(pmap, browser.PresentationMap)
+    assert pmap.uri == "https://content.invalid/pmap.xml"
+    assert pmap.version == 484
+    assert pmap.page_size == 100
+    assert pmap.artwork_size_map == {40: "40x40", 200: "200x200"}
+    assert pmap.browse_icon_size_map == {40: "-40.png", 0: "-legacy.png"}
+    assert pmap.display_types["__root__"] == {"display_mode": "BRAND"}
+    assert pmap.display_types["GridView"] == {"display_mode": "GRID"}
+    assert pmap.display_types["AlbumView"]["lines"] == [
+        {"token": "title"},
+        {"token": "artist"},
+        {"token": "summary"},
+    ]
+    assert pmap.display_types["TitleWithArtist"]["lines"] == [
+        {"token": "title"},
+        {"string_id": "Artist_And_Album"},
+    ]
+    assert pmap.display_types["TitleWithArtist"]["item_thumbnails"] == "albumArtUri"
+    assert pmap.search_categories == {
+        "SearchTitle": [
+            {"id": "artists", "mapped_id": "artist", "custom": False},
+            {"id": "tracks", "mapped_id": "song", "custom": False},
+            {"id": "radioShows", "mapped_id": "radioshow", "custom": True},
+        ],
+        "LibrarySearchTitle": [
+            {"id": "artists", "mapped_id": "libraryartist", "custom": False}
+        ],
+    }
+    assert pmap.search_variants() == {
+        "artists": [
+            ("SearchTitle", "artist"),
+            ("LibrarySearchTitle", "libraryartist"),
+        ],
+        "tracks": [("SearchTitle", "song")],
+        "radioShows": [("SearchTitle", "radioshow")],
+    }
+    assert pmap.menu_item_overrides == [
+        {
+            "StringId": "StartStation",
+            "MenuItem": "RelatedPlay",
+            "PromptStringId": "StartStation_PROMPT",
+        }
+    ]
+    assert pmap.stream_quality_badges == {"16bit": "Lossless"}
+    # Cached: the second call performs no additional fetch.
+    assert music_browser.get_presentation_map() is pmap
+    assert len(session.get_calls) == 2
+
+
+def test_get_presentation_map_prefers_descriptor_uri(monkeypatch):
+    session = FakeSession(get_responses=[FakeResponse(content=PMAP_XML)])
+    service = FakeService(presentation_map_uri="https://content.invalid/pmap.xml")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    pmap = music_browser.get_presentation_map()
+
+    assert pmap.uri == "https://content.invalid/pmap.xml"
+    assert pmap.version is None
+    # No manifest fetch needed; only the descriptor-URI pmap is downloaded.
+    assert len(session.get_calls) == 1
+
+
+def test_get_presentation_map_returns_none_without_uri(monkeypatch):
+    session = FakeSession()
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    assert music_browser.get_presentation_map() is None
+    assert len(session.get_calls) == 0
+
+
+def test_get_presentation_map_raises_on_fetch_failure(monkeypatch):
+    manifest = {"presentationMap": {"uri": "https://content.invalid/pmap.xml"}}
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(json_value=manifest),
+            FakeResponse(status_code=500),
+        ]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    with pytest.raises(MusicServiceException, match="presentation map request failed"):
+        music_browser.get_presentation_map()
+
+
+def test_get_presentation_map_raises_on_malformed_xml(monkeypatch):
+    manifest = {"presentationMap": {"uri": "https://content.invalid/pmap.xml"}}
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(json_value=manifest),
+            FakeResponse(content=b"<Presentation>"),
+        ]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    with pytest.raises(MusicServiceException, match="not valid XML"):
+        music_browser.get_presentation_map()

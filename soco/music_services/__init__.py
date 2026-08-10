@@ -9,6 +9,7 @@ from .browser import (
     MusicServiceBrowseItem,
     MusicServiceBrowseResult,
     MusicServiceBrowser,
+    PresentationMap,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "MusicServiceBrowseItem",
     "MusicServiceBrowseResult",
     "MusicServiceBrowser",
+    "PresentationMap",
 ]

@@ -19,7 +19,13 @@ import requests
 from ... import discovery
 from ...exceptions import MusicServiceAuthException, MusicServiceException
 from ..music_service import MusicService
-from .content import _content_endpoint, _content_headers, _content_item
+from .catalog import _fetch_presentation_map, PresentationMap
+from .content import (
+    _content_endpoint,
+    _content_headers,
+    _content_item,
+    _service_manifest,
+)
 from .credentials import (
     _account_content_device_id,
     _local_time_zone,
@@ -107,6 +113,8 @@ class MusicServiceBrowser:
             )
         )
         self._client = self._make_client(self.device.household_id)
+        self._manifest = None
+        self._presentation_map = None
         self._content_endpoint = self._find_content_endpoint()
         self._content_views = {}
 
@@ -162,7 +170,9 @@ class MusicServiceBrowser:
         if not self.music_service.manifest_uri:
             return ""
         try:
-            return _content_endpoint(self.music_service, self.session)
+            return _content_endpoint(
+                self.music_service, self.session, manifest=self.get_manifest()
+            )
         except MusicServiceException:
             # A manifest is optional browse metadata. If it does not advertise
             # a usable browse endpoint, preserve legacy SMAPI as the fallback.
@@ -242,6 +252,52 @@ class MusicServiceBrowser:
     def manifest_uri(self):
         """str: The manifest URI, if advertised."""
         return self.music_service.manifest_uri
+
+    def get_manifest(self):
+        """Return the service JSON manifest, fetching and caching it in memory.
+
+        The manifest is already downloaded during construction whenever the
+        service advertises one (it decides the content browse transport), so
+        this normally costs nothing extra.  Services without a manifest return
+        an empty dict.
+
+        Returns:
+            dict: The parsed manifest document.
+        """
+        if self._manifest is None:
+            self._manifest = _service_manifest(self.music_service, self.session)
+        return self._manifest
+
+    @property
+    def manifest_data(self):
+        """dict: The parsed service manifest, fetched and cached on demand.
+
+        Mirrors the attribute of the same name on :class:`MusicService`.
+        """
+        return self.get_manifest()
+
+    def get_presentation_map(self):
+        """Return the service presentation map, fetching and caching it in memory.
+
+        The presentation map is the XML document which defines search
+        categories and variants, display types, artwork/icon size maps and
+        provider badges.  Its URI is taken from the descriptor's
+        ``PresentationMapUri`` when advertised, and otherwise from the JSON
+        manifest's ``presentationMap`` entry.
+
+        Returns:
+            :class:`PresentationMap` or ``None``: The parsed presentation
+            map, or ``None`` when the service does not advertise one.
+
+        Raises:
+            MusicServiceException: If the presentation map cannot be fetched
+                or parsed.
+        """
+        if self._presentation_map is None:
+            self._presentation_map = _fetch_presentation_map(
+                self.music_service, self.session, self.get_manifest()
+            )
+        return self._presentation_map
 
     def _content_root(self):
         content_device_id = (
@@ -538,4 +594,5 @@ __all__ = [
     "MusicServiceBrowseItem",
     "MusicServiceBrowseResult",
     "MusicServiceBrowser",
+    "PresentationMap",
 ]
