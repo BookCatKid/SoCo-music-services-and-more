@@ -26,12 +26,15 @@ Known problems:
 """
 
 import logging
+import re
+from dataclasses import dataclass, field
 from urllib.parse import quote as quote_url
 import json
 import requests
 from xmltodict import parse
 
 from .. import discovery
+from ..cache import Cache
 from ..exceptions import MusicServiceException, MusicServiceAuthException
 from .data_structures import parse_response, MusicServiceItem
 from .token_store import JsonFileTokenStore
@@ -39,6 +42,131 @@ from ..soap import SoapFault, SoapMessage
 from ..xml import XML
 
 log = logging.getLogger(__name__)  # pylint: disable=C0103
+
+#: The public music-service logo catalog used by the desktop controller's
+#: RMSLogoMgr.  See ``LOGO_CATALOG_URL``.
+LOGO_CATALOG_URL = "http://update-services.sonos.com/services/mslogo.xml"
+_LOGO_CATALOG_TIMEOUT = 20
+#: The catalog is small and only changes when Sonos adds or rebrands a
+#: service, so a day is a safe cache lifetime.
+_LOGO_CATALOG_CACHE_TIMEOUT = 24 * 60 * 60
+_MANIFEST_UUID_RE = re.compile(
+    r"/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+)
+#: Placement fallback ladder, mirroring the controller's SCLogoArtSize ladder.
+_LOGO_PLACEMENT_LADDER = (
+    "square:medium",
+    "square",
+    "square:small",
+    "square:large",
+    "square:x-small",
+)
+
+#: Cache for the parsed logo catalog, shared by all MusicService instances.
+_logo_catalog_cache = Cache(default_timeout=0)
+
+
+def _local_name(tag):
+    """Return an XML tag name without its namespace."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _manifest_uuid(manifest_uri):
+    """Return the manifest UUID for a service, or an empty string."""
+    match = _MANIFEST_UUID_RE.search(manifest_uri or "")
+    return match.group(1) if match else ""
+
+
+def _parse_logo_catalog(payload):
+    """Parse the mslogo catalog into a UUID -> {placement: url} mapping.
+
+    The catalog's ``<sized>`` and ``<presentationmap>`` sections both list
+    ``<service id="...">`` entries with
+    ``<image placement="...">URL</image>`` children.  Entries with the same
+    id across sections are merged, and the result is keyed by the manifest
+    UUID embedded in each image URL, which is the same UUID that appears in a
+    service's ``<Manifest Uri=...>`` value.
+    """
+    root = XML.fromstring(payload)
+    merged = {}
+    for section in root:
+        for service in section:
+            if _local_name(service.tag) != "service":
+                continue
+            catalog_id = service.attrib.get("id", "")
+            entry = merged.setdefault(catalog_id, {"uuids": set(), "placements": {}})
+            for image in service:
+                if _local_name(image.tag) != "image":
+                    continue
+                placement = image.attrib.get("placement", "")
+                url = (image.text or "").strip()
+                if not placement or not url:
+                    continue
+                entry["placements"].setdefault(placement, url)
+                match = re.search(r"/([0-9a-f]{8}-[0-9a-f-]{27})/", url)
+                if match:
+                    entry["uuids"].add(match.group(1))
+    by_uuid = {}
+    for entry in merged.values():
+        for uuid in entry["uuids"]:
+            by_uuid.setdefault(uuid, entry["placements"])
+    return by_uuid
+
+
+def _fetch_logo_catalog():
+    """Return the parsed logo catalog, fetching it through SoCo's cache.
+
+    The catalog is small and changes rarely, so the parsed result is kept in
+    SoCo's cache (see :class:`soco.cache.Cache`) for a day.  As with every
+    other SoCo cache, this respects ``config.CACHE_ENABLED``.
+    """
+    cached = _logo_catalog_cache.get("logo_catalog", url=LOGO_CATALOG_URL)
+    if cached is not None:
+        return cached
+    response = requests.get(LOGO_CATALOG_URL, timeout=_LOGO_CATALOG_TIMEOUT)
+    response.raise_for_status()
+    parsed = _parse_logo_catalog(response.content)
+    _logo_catalog_cache.put(
+        parsed,
+        "logo_catalog",
+        url=LOGO_CATALOG_URL,
+        timeout=_LOGO_CATALOG_CACHE_TIMEOUT,
+    )
+    return parsed
+
+
+@dataclass
+class AvailableMusicService:
+    """One music service available to the household.
+
+    Instances are returned by :meth:`MusicService.get_all_music_services`.
+    ``logos`` maps a logo placement (e.g. ``"square:medium"``) to a catalog
+    URL, and is only populated when logos were requested and the service has
+    an entry in the logo catalog.
+    """
+
+    service_id: int
+    name: str
+    container_type: str
+    capabilities: int
+    auth_type: str
+    service_type: str
+    manifest_uri: str
+    logos: dict = field(default_factory=dict)
+
+    def get_logo_url(self, placement="square:medium"):
+        """Return the closest available logo URL for a placement.
+
+        The requested placement is used when present; otherwise the closest
+        available placement is chosen using the controller's size ladder.
+        Returns an empty string when the service has no catalog entry.
+        """
+        if placement in self.logos:
+            return self.logos[placement]
+        for candidate in _LOGO_PLACEMENT_LADDER:
+            if candidate in self.logos:
+                return self.logos[candidate]
+        return next(iter(self.logos.values()), "")
 
 
 # pylint: disable=protected-access
@@ -589,6 +717,45 @@ class MusicService:
             list: A list of strings.
         """
         return [service["Name"] for service in cls._get_music_services_data().values()]
+
+    @classmethod
+    def get_all_music_services(cls, include_logos=False):
+        """Get a list of all available music services.
+
+        Unlike :meth:`get_all_music_services_names`, this returns the full
+        metadata from the ``ListAvailableServices`` descriptors for each
+        service.
+
+        Args:
+            include_logos (bool): If `True`, fetch Sonos's public
+                music-service logo catalog and populate each service's
+                ``logos`` mapping with the catalog URLs, keyed by placement
+                (e.g. ``"square:medium"``).  Services without a catalog entry
+                get an empty mapping.
+
+        Returns:
+            list: :class:`AvailableMusicService` instances.
+        """
+        catalog = _fetch_logo_catalog() if include_logos else {}
+        services = []
+        for service_type, data in cls._get_music_services_data().items():
+            manifest_uri = data.get("ManifestUri", "")
+            logos = {}
+            if include_logos:
+                logos = catalog.get(_manifest_uuid(manifest_uri), {})
+            services.append(
+                AvailableMusicService(
+                    service_id=int(data["Id"]),
+                    name=data["Name"],
+                    container_type=data.get("ContainerType", ""),
+                    capabilities=int(data.get("Capabilities", "0")),
+                    auth_type=data.get("Auth", ""),
+                    service_type=service_type,
+                    manifest_uri=manifest_uri,
+                    logos=logos,
+                )
+            )
+        return services
 
     @classmethod
     def get_data_for_name(cls, service_name):
