@@ -317,6 +317,7 @@ async function loadSearch() {
             <option value="browser">MusicServiceBrowser (account-aware)</option>
             <option value="legacy">MusicService (legacy, token store)</option>
           </select>
+          <select id="s-account" class="hidden"></select>
           <select id="s-cat"><option value="">— category —</option>
             ${categories.map(c => `<option>${esc(c)}</option>`).join("")}
           </select>
@@ -327,6 +328,7 @@ async function loadSearch() {
         <div class="hint" id="s-hint"></div>
       </div>
       <div id="s-results"></div>`;
+    loadAccounts("s-account");
     const catSel = document.getElementById("s-cat");
     const varSel = document.getElementById("s-var");
     catSel.onchange = () => {
@@ -346,23 +348,51 @@ async function loadSearch() {
   } catch (e) { el.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
 }
 
+async function loadAccounts(selectId) {
+  // Populate the account picker (hidden unless several accounts are configured
+  // for the selected service).
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  try {
+    const data = await api(`/api/accounts?service=${encodeURIComponent(state.service)}`);
+    const accounts = data.accounts || [];
+    if (accounts.length <= 1) {
+      select.classList.add("hidden");
+      select.innerHTML = "";
+      return;
+    }
+    select.classList.remove("hidden");
+    select.title = "Multiple accounts configured — pick one";
+    select.innerHTML =
+      '<option value="">any account (first)</option>' +
+      accounts.map(a => `<option value="${esc(a.nickname)}">${esc(a.nickname)}${a.tier ? " · " + esc(a.tier) : ""}</option>`).join("");
+  } catch (e) { select.classList.add("hidden"); }
+}
+
+function selectedAccount() {
+  const select = document.getElementById("s-account");
+  return select && !select.classList.contains("hidden") ? select.value : "";
+}
+
 async function runSearch() {
   const cat = document.getElementById("s-cat").value;
   const term = document.getElementById("s-term").value.trim();
   if (!cat) return;
   const apiSel = document.getElementById("s-api").value;
   const variant = document.getElementById("s-var").value;
+  const account = selectedAccount();
   state.searchPage = 0;
-  await fetchSearch(cat, term, apiSel, variant, 0);
+  await fetchSearch(cat, term, apiSel, variant, 0, account);
 }
 
-async function fetchSearch(cat, term, apiSel, variant, page) {
+async function fetchSearch(cat, term, apiSel, variant, page, account) {
   const box = document.getElementById("s-results");
   box.innerHTML = '<div class="msg"><span class="spinner"></span> Searching…</div>';
   try {
     const data = await api(`/api/search?service=${encodeURIComponent(state.service)}` +
       `&category=${encodeURIComponent(cat)}&term=${encodeURIComponent(term)}` +
-      `&variant=${encodeURIComponent(variant)}&api=${apiSel}&index=${page * 20}&count=20`);
+      `&variant=${encodeURIComponent(variant)}&api=${apiSel}&index=${page * 20}&count=20` +
+      (account ? `&account=${encodeURIComponent(account)}` : ""));
     const items = (data.items || []).map(it => `
       <div class="card" data-id="${esc(it.id)}">
         <div class="title">${esc(it.title) || "(untitled)"}</div>
@@ -380,7 +410,7 @@ async function fetchSearch(cat, term, apiSel, variant, page) {
       if (card) fillMetadata(card.dataset.id);
     };
     const next = document.getElementById("s-next");
-    if (next) next.onclick = () => fetchSearch(cat, term, apiSel, variant, page + 1);
+    if (next) next.onclick = () => fetchSearch(cat, term, apiSel, variant, page + 1, account);
   } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
 }
 
@@ -395,6 +425,7 @@ async function loadBrowse() {
           <option value="browser">MusicServiceBrowser</option>
           <option value="legacy">MusicService</option>
         </select>
+        <select id="b-account" class="hidden"></select>
         <label class="muted"><input type="checkbox" id="b-rec"> recursive</label>
         <button class="secondary" onclick="loadBrowseRoot()">Browse root</button>
       </div>
@@ -402,6 +433,7 @@ async function loadBrowse() {
       <div class="hint" id="b-hint">Browse the service's root container, then click into any container.</div>
     </div>
     <div id="b-results"></div>`;
+  loadAccounts("b-account");
 }
 
 async function loadBrowseRoot() {
@@ -421,12 +453,15 @@ async function fetchBrowse(id, page, transport) {
   const box = document.getElementById("b-results");
   const apiSel = document.getElementById("b-api").value;
   const recursive = document.getElementById("b-rec").checked ? "1" : "0";
+  const accountSel = document.getElementById("b-account");
+  const account = accountSel && !accountSel.classList.contains("hidden") ? accountSel.value : "";
   state.browsePage = page;
   box.innerHTML = '<div class="msg"><span class="spinner"></span> Browsing…</div>';
   try {
     const data = await api(`/api/browse?service=${encodeURIComponent(state.service)}` +
       `&item=${encodeURIComponent(id)}&transport=${encodeURIComponent(transport || "")}` +
-      `&api=${apiSel}&index=${page * 20}&count=20&recursive=${recursive}`);
+      `&api=${apiSel}&index=${page * 20}&count=20&recursive=${recursive}` +
+      (account ? `&account=${encodeURIComponent(account)}` : ""));
     const crumb = document.getElementById("b-crumb");
     if (state.browseStack.length) {
       crumb.classList.remove("hidden");

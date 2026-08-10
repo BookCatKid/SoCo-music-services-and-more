@@ -85,21 +85,49 @@ def _get_service(name):
     return MusicService(name, device=_device())
 
 
-def _get_browser(name):
+def _accounts_for(name):
+    """The configured household accounts for one service.
+
+    ``MusicServiceBrowser`` refuses to pick when several accounts exist for
+    the same service (eg two Amazon Music logins), so the app resolves them
+    itself and passes the chosen one explicitly.
+    """
+    service_id = int(MusicService(name, device=_device()).service_id)
+    accounts = ConfiguredMusicServiceAccount.get_accounts(_device(), timeout=10)
+    return [a for a in accounts if a.service_id == service_id]
+
+
+def _get_browser(name, account=None):
     """A MusicServiceBrowser (account-aware) for a named service.
 
     This uses the account credentials Sonos already stores for the household,
     so search/browse work for authenticated services without any token dance.
     The browser is cached because constructing it performs an account event
     capture and a manifest fetch.
+
+    Args:
+        name (str): Service name.
+        account (ConfiguredMusicServiceAccount, optional): The account to use.
+            When omitted and the service has exactly one configured account,
+            that account is used; when there are several, the first one is
+            used so the demo never dies on the multi-account guard.
     """
     cache = getattr(app, "_browsers", {})
-    if name in cache:
-        return cache[name]
-    browser = MusicServiceBrowser(name, device=_device(), allow_credential_refresh=True)
-    cache[name] = browser
+    key = (name, getattr(account, "serial_number", 0))
+    if key in cache:
+        return cache[key]
+    if account is None:
+        matches = _accounts_for(name)
+        account = matches[0] if matches else None
+    kwargs = {}
+    if account is not None:
+        kwargs["account"] = account
+    browser = MusicServiceBrowser(
+        name, device=_device(), allow_credential_refresh=True, **kwargs
+    )
+    cache[key] = browser
     # A demo app doesn't need to hold every service's browser forever.
-    if len(cache) > 8:
+    if len(cache) > 12:
         cache.pop(next(iter(cache)))
     app._browsers = cache
     return browser
@@ -135,8 +163,26 @@ def _legacy_search(name, category, term, variant, index, count):
     }
 
 
-def _browser_search(name, category, term, variant, index, count):
-    browser = _get_browser(name)
+def _account_from_request(name):
+    """Resolve the account a request wants, defaulting to the first one.
+
+    The UI sends ``account=<nickname>`` when several accounts exist for a
+    service; the first configured account is used as the default.
+    """
+    wanted = request.args.get("account", "")
+    matches = _accounts_for(name)
+    if not matches:
+        return None
+    if not wanted:
+        return matches[0]
+    for account in matches:
+        if account.nickname == wanted or str(account.serial_number) == wanted:
+            return account
+    return matches[0]
+
+
+def _browser_search(name, category, term, variant, index, count, account=None):
+    browser = _get_browser(name, account=account)
     result = browser.search(category, term, index=index, count=count, variant=variant)
     return {
         "items": [
@@ -181,8 +227,8 @@ def _legacy_browse(name, item_id, index, count, recursive):
     }
 
 
-def _browser_browse(name, item_id, index, count, recursive):
-    browser = _get_browser(name)
+def _browser_browse(name, item_id, index, count, recursive, account=None):
+    browser = _get_browser(name, account=account)
     # Content-session children must be handed back to SMAPI with the account's
     # OAuth device identity. The browser only does that when it receives a
     # MusicServiceBrowseItem with a content source_transport, so rebuild the
@@ -229,8 +275,8 @@ def _legacy_media_metadata(name, item_id):
     return {"metadata": service.get_media_metadata(item_id)}
 
 
-def _browser_media_metadata(name, item_id):
-    browser = _get_browser(name)
+def _browser_media_metadata(name, item_id, account=None):
+    browser = _get_browser(name, account=account)
     return {"metadata": browser.get_media_metadata(item_id)}
 
 
@@ -334,6 +380,31 @@ def api_categories():
         return jsonify({"error": str(error)}), 500
 
 
+@app.route("/api/accounts")
+def api_accounts():
+    """The configured household accounts for one service."""
+    name = request.args.get("service", "")
+    if not name:
+        return jsonify({"error": "missing service"}), 400
+    try:
+        accounts = _accounts_for(name)
+        return jsonify(
+            {
+                "accounts": [
+                    {
+                        "nickname": account.nickname or "unnamed",
+                        "serial_number": account.serial_number,
+                        "tier": account.tier,
+                        "username": account.username,
+                    }
+                    for account in accounts
+                ]
+            }
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
 @app.route("/api/search")
 def api_search():
     """Search one service; demonstrates legacy and browser APIs side by side."""
@@ -344,9 +415,10 @@ def api_search():
     api = request.args.get("api", "legacy")
     index = int(request.args.get("index", 0))
     count = int(request.args.get("count", 20))
+    account = _account_from_request(name)
     try:
         if api == "browser":
-            data = _browser_search(name, category, term, variant, index, count)
+            data = _browser_search(name, category, term, variant, index, count, account)
         else:
             data = _legacy_search(name, category, term, variant, index, count)
         return jsonify(data)
@@ -363,9 +435,10 @@ def api_browse():
     index = int(request.args.get("index", 0))
     count = int(request.args.get("count", 20))
     recursive = request.args.get("recursive", "0") == "1"
+    account = _account_from_request(name)
     try:
         if api == "browser":
-            data = _browser_browse(name, item_id, index, count, recursive)
+            data = _browser_browse(name, item_id, index, count, recursive, account)
         else:
             data = _legacy_browse(name, item_id, index, count, recursive)
         return jsonify(data)
@@ -379,9 +452,10 @@ def api_metadata():
     name = request.args.get("service", "")
     item_id = request.args.get("item", "")
     api = request.args.get("api", "legacy")
+    account = _account_from_request(name)
     try:
         if api == "browser":
-            data = _browser_media_metadata(name, item_id)
+            data = _browser_media_metadata(name, item_id, account)
         else:
             data = _legacy_media_metadata(name, item_id)
         return jsonify(data)
