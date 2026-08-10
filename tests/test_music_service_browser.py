@@ -233,7 +233,9 @@ def test_capture_accounts_reuses_zone_group_topology_subscription(monkeypatch):
     device = FakeDevice()
     device.zoneGroupTopology = FakeZoneGroupTopology(event)
     monkeypatch.setattr(
-        browser, "_decrypt_account_payload", lambda value, household: ACCOUNT_XML
+        browser.credentials,
+        "_decrypt_account_payload",
+        lambda value, household: ACCOUNT_XML,
     )
 
     accounts = ConfiguredMusicServiceAccount.get_accounts(device, timeout=4)
@@ -259,7 +261,7 @@ def test_account_payload_key_derivation_and_integrity(monkeypatch):
         observed["iv"] = received_iv
         return checked
 
-    monkeypatch.setattr(browser, "_aes_128_cbc_decrypt", fake_decrypt)
+    monkeypatch.setattr(browser.credentials, "_aes_128_cbc_decrypt", fake_decrypt)
 
     assert browser._decrypt_account_payload(encoded, household) == payload
     global_key = hashlib.md5(household.encode("utf-8") + browser._ACCOUNT_SALT).digest()
@@ -272,7 +274,9 @@ def test_account_payload_key_derivation_and_integrity(monkeypatch):
 
 def test_account_payload_rejects_bad_integrity(monkeypatch):
     encoded = "2:" + base64.b64encode(b"0" * 32).decode("ascii")
-    monkeypatch.setattr(browser, "_aes_128_cbc_decrypt", lambda *_args: b"payloadbad!")
+    monkeypatch.setattr(
+        browser.credentials, "_aes_128_cbc_decrypt", lambda *_args: b"payloadbad!"
+    )
 
     with pytest.raises(MusicServiceException, match="integrity"):
         browser._decrypt_account_payload(encoded, "Sonos_household")
