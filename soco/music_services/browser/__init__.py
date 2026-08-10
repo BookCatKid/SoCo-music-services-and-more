@@ -183,6 +183,66 @@ class MusicServiceBrowser:
         """Delegate search-category discovery to the existing MusicService API."""
         return self.music_service.available_search_categories
 
+    @property
+    def available_search_variants(self):
+        """Delegate search-variant discovery to the existing MusicService API."""
+        return self.music_service.available_search_variants
+
+    @property
+    def service_name(self):
+        """str: The service name."""
+        return self.music_service.service_name
+
+    @property
+    def service_id(self):
+        """The Sonos service id from the descriptor."""
+        return self.music_service.service_id
+
+    @property
+    def service_type(self):
+        """str: The Sonos service type."""
+        return self.music_service.service_type
+
+    @property
+    def auth_type(self):
+        """str: The auth type (Anonymous, UserId, DeviceLink, AppLink)."""
+        return self.music_service.auth_type
+
+    @property
+    def capabilities(self):
+        """The descriptor capability flags."""
+        return self.music_service.capabilities
+
+    @property
+    def version(self):
+        """str: The descriptor version."""
+        return self.music_service.version
+
+    @property
+    def container_type(self):
+        """str: The descriptor container type."""
+        return self.music_service.container_type
+
+    @property
+    def uri(self):
+        """str: The (insecure) SMAPI endpoint."""
+        return self.music_service.uri
+
+    @property
+    def secure_uri(self):
+        """str: The HTTPS SMAPI endpoint."""
+        return self.music_service.secure_uri
+
+    @property
+    def presentation_map_uri(self):
+        """str: The presentation-map URI, if advertised."""
+        return self.music_service.presentation_map_uri
+
+    @property
+    def manifest_uri(self):
+        """str: The manifest URI, if advertised."""
+        return self.music_service.manifest_uri
+
     def _content_root(self):
         content_device_id = (
             _account_content_device_id(self.device.household_id, self.account)

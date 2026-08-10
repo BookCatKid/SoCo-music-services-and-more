@@ -137,10 +137,15 @@ class FakeService:
     ):
         self.service_name = name
         self.service_id = service_id
+        self.service_type = "MusicService"
         self.auth_type = auth_type
         self.capabilities = capabilities
-        self.manifest_uri = manifest_uri
+        self.version = "1.0"
+        self.container_type = "MusicService"
+        self.uri = "http://example.invalid/smapi"
         self.secure_uri = "https://example.invalid/smapi"
+        self.presentation_map_uri = None
+        self.manifest_uri = manifest_uri
         if search_variants is None:
             search_variants = {"tracks": [("default", "search:track")]}
         self.search_variants = search_variants
@@ -837,6 +842,36 @@ def test_get_metadata_omits_sort_params_when_unset(monkeypatch):
     fields = {browser._local_name(node.tag): node.text or "" for node in op}
     assert "sortOrder" not in fields
     assert "sortAscending" not in fields
+
+
+def test_available_search_variants_delegates_to_legacy(monkeypatch):
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=FakeSession()
+    )
+
+    assert music_browser.available_search_variants == {"tracks": ["default"]}
+
+
+def test_browser_proxies_descriptor_attributes(monkeypatch):
+    service = FakeService(service_id="204", auth_type="AppLink")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=FakeSession()
+    )
+
+    assert music_browser.service_id == "204"
+    assert music_browser.service_name == "Example"
+    assert music_browser.service_type == "MusicService"
+    assert music_browser.auth_type == "AppLink"
+    assert music_browser.capabilities == "0"
+    assert music_browser.version == "1.0"
+    assert music_browser.container_type == "MusicService"
+    assert music_browser.uri == "http://example.invalid/smapi"
+    assert music_browser.secure_uri == "https://example.invalid/smapi"
+    assert music_browser.presentation_map_uri is None
+    assert music_browser.manifest_uri is None
 
 
 def test_device_link_without_token_uses_get_session_id():
