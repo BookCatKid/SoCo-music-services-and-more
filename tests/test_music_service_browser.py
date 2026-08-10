@@ -632,6 +632,67 @@ def test_get_media_metadata_is_read_only(monkeypatch):
     assert not browser._children(envelope, "AddOAuthAccountX")
 
 
+def test_get_media_uri_returns_streaming_uri(monkeypatch):
+    media_uri = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <getMediaURIResponse xmlns="http://www.sonos.com/Services/1.1">
+          <getMediaURIResult>x-sonosapi-stream:track:1</getMediaURIResult>
+        </getMediaURIResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(post_responses=[FakeResponse(content=media_uri)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    uri = music_browser.get_media_uri("track:1")
+
+    assert uri == "x-sonosapi-stream:track:1"
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "getMediaURI")
+    assert browser._children(envelope, "id")[0].text == "track:1"
+
+
+def test_get_media_uri_accepts_browse_item(monkeypatch):
+    media_uri = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <getMediaURIResponse xmlns="http://www.sonos.com/Services/1.1">
+          <getMediaURIResult>https://cdn.example.invalid/track.mp3</getMediaURIResult>
+        </getMediaURIResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(post_responses=[FakeResponse(content=media_uri)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    item = MusicServiceBrowseItem("track:1", "Title", "mediaMetadata")
+    uri = music_browser.get_media_uri(item)
+
+    assert uri == "https://cdn.example.invalid/track.mp3"
+
+
+def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
+    service = FakeService(service_id="204")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=FakeSession()
+    )
+
+    uri = music_browser.sonos_uri_from_id("spotify:track:2qs5ZcLByNTctJKbhAZ9JE")
+
+    assert uri == "soco://spotify%3Atrack%3A2qs5ZcLByNTctJKbhAZ9JE?sid=204&sn=3"
+
+
 def test_device_link_without_token_uses_get_session_id():
     session_response = b"""\
     <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">

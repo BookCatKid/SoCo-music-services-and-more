@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import uuid
 from collections.abc import Mapping
+from urllib.parse import quote as quote_url
 
 import requests
 
@@ -990,6 +991,21 @@ class _ConfiguredSmapiClient:
             return result
         return {"value": value}
 
+    def get_media_uri(self, object_id):
+        """Return the provider streaming URI for one item."""
+        try:
+            root = self._request_with_refresh("getMediaURI", {"id": object_id})
+        except _BrowseSoapFault as fault:
+            if self._is_expired_fault(fault):
+                raise MusicServiceAuthException(str(fault)) from fault
+            raise fault.as_music_service_exception() from fault
+        results = _children(root, "getMediaURIResult")
+        if not results:
+            raise MusicServiceException(
+                "getMediaURI response did not contain a result"
+            )
+        return (results[0].text or "").strip() or None
+
 
 class _BrowseSoapFault(Exception):
     """Internal representation of a provider SOAP fault."""
@@ -1526,3 +1542,15 @@ class MusicServiceBrowser:
         """Return provider metadata for one item without changing playback."""
         object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
         return self._client.get_media_metadata(object_id)
+
+    def get_media_uri(self, item):
+        """Return the provider streaming URI for one item."""
+        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
+        return self._scoped_client().get_media_uri(object_id)
+
+    def sonos_uri_from_id(self, item_id):
+        """Return a URI which can be sent to a player for playing."""
+        encoded = quote_url(str(item_id).encode("utf-8"))
+        return "soco://{}?sid={}&sn={}".format(
+            encoded, self.music_service.service_id, self.account.serial_number
+        )
