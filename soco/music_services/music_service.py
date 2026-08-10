@@ -183,8 +183,14 @@ class MusicServiceSoapClient:
 
         try:
             result_elt = message.call()
+        except requests.exceptions.RequestException as exc:
+            # HTTP/connection failures from the provider are provider errors
+            raise MusicServiceException(
+                "Error contacting {}: {}".format(self.music_service.service_name, exc)
+            ) from exc
         except SoapFault as exc:
-            if "Client.AuthTokenExpired" in exc.faultcode:
+            # Guard against faults with no code (eg Atmosphere)
+            if exc.faultcode and "Client.AuthTokenExpired" in exc.faultcode:
                 raise MusicServiceAuthException(
                     "Authorization for {} expired, is invalid or has not yet been "
                     "completed: [{} / {} / {}]".format(
@@ -195,7 +201,7 @@ class MusicServiceSoapClient:
                     )
                 ) from exc
 
-            if "Client.TokenRefreshRequired" in exc.faultcode:
+            if exc.faultcode and "Client.TokenRefreshRequired" in exc.faultcode:
                 log.debug(
                     "Auth token for %s expired, attempting to refresh",
                     self.music_service.service_name,
@@ -257,7 +263,23 @@ class MusicServiceSoapClient:
                     namespace=self.namespace,
                     timeout=self.timeout,
                 )
-                result_elt = message.call()
+                try:
+                    result_elt = message.call()
+                except (SoapFault, XML.ParseError) as refresh_exc:
+                    # Refresh failed (eg account needs re-linking); fail cleanly
+                    raise MusicServiceAuthException(
+                        "Token refresh for {} failed: [{} / {}]".format(
+                            self.music_service.service_name,
+                            getattr(refresh_exc, "faultcode", None),
+                            getattr(refresh_exc, "faultstring", refresh_exc),
+                        )
+                    ) from refresh_exc
+                except requests.exceptions.RequestException as refresh_exc:
+                    raise MusicServiceException(
+                        "Error contacting {} while refreshing token: {}".format(
+                            self.music_service.service_name, refresh_exc
+                        )
+                    ) from refresh_exc
             else:
                 log.exception(
                     "Unhandled SOAP Fault. Code: %s. Detail: %s. String: %s",

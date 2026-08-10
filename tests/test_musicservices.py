@@ -3,10 +3,11 @@
 from unittest import mock
 import pytest
 
+import soco.music_services.music_service
 import soco.soap
-from soco.exceptions import MusicServiceException
+from soco.exceptions import MusicServiceAuthException, MusicServiceException
 from soco.music_services.accounts import Account
-from soco.music_services.music_service import MusicService
+from soco.music_services.music_service import MusicService, MusicServiceSoapClient
 
 # Typical account data from http://{Sonos-ip}:1400/status/accounts
 from soco.music_services.token_store import JsonFileTokenStore
@@ -437,6 +438,98 @@ def test_search():
     with pytest.raises(MusicServiceException) as excinfo:
         spotify.search("badcategory")
     assert "support the 'badcategory' search category" in str(excinfo.value)
+
+
+def test_call_with_none_faultcode_raises_clean_error(monkeypatch):
+    """A provider returning a fault with no code at all (eg Atmosphere)
+    must raise a MusicServiceException, not crash on the faultcode check."""
+    client = MusicServiceSoapClient.__new__(MusicServiceSoapClient)
+    client.endpoint = "https://invalid/smapi"
+    client.timeout = 1
+    client.http_headers = {}
+    client.namespace = "http://www.sonos.com/Services/1.1"
+    client.get_soap_header = mock.Mock(return_value="<credentials/>")
+    client.music_service = mock.Mock(service_name="Atmosphere by Kollekt.fm")
+    client.token_store = mock.Mock()
+
+    message = mock.Mock()
+    message.call.side_effect = soco.soap.SoapFault(None, None, None)
+    monkeypatch.setattr(
+        soco.music_services.music_service,
+        "SoapMessage",
+        mock.Mock(return_value=message),
+    )
+
+    with pytest.raises(MusicServiceException):
+        client.call("getMetadata")
+
+
+def _soap_client_for(name):
+    """A bare MusicServiceSoapClient with only the attributes call() needs."""
+    client = MusicServiceSoapClient.__new__(MusicServiceSoapClient)
+    client.endpoint = "https://invalid/smapi"
+    client.timeout = 1
+    client.http_headers = {}
+    client.namespace = "http://www.sonos.com/Services/1.1"
+    client.get_soap_header = mock.Mock(return_value="<credentials/>")
+    client.music_service = mock.Mock(
+        service_name=name, service_id=0, auth_type="DeviceLink"
+    )
+    client.token_store = mock.Mock()
+    client._device = mock.Mock(household_id="household")
+    return client
+
+
+def test_call_wraps_http_errors_as_provider_errors(monkeypatch):
+    """HTTP 4xx/5xx from a provider (eg YouTube Music 403, Spectre 401) must
+    surface as a MusicServiceException, not a raw HTTPError."""
+    import requests
+
+    client = _soap_client_for("YouTube Music")
+    message = mock.Mock()
+    message.call.side_effect = requests.exceptions.HTTPError(
+        "403 Client Error: Forbidden"
+    )
+    monkeypatch.setattr(
+        soco.music_services.music_service,
+        "SoapMessage",
+        mock.Mock(return_value=message),
+    )
+
+    with pytest.raises(MusicServiceException) as excinfo:
+        client.call("getMetadata")
+    assert "403" in str(excinfo.value)
+
+
+def test_call_refresh_failure_raises_auth_error(monkeypatch):
+    """When the token-refresh re-call itself faults (eg Pandora's token can
+    only be fixed by re-linking in the Sonos app), surface a clean auth
+    error instead of a raw SoapFault escaping call()."""
+    from soco.xml import XML
+
+    client = _soap_client_for("Pandora")
+    detail = XML.Element("detail")
+    auth_token = XML.SubElement(detail, "{%s}authToken" % client.namespace)
+    auth_token.text = "new-token"
+    private_key = XML.SubElement(detail, "{%s}privateKey" % client.namespace)
+    private_key.text = "new-key"
+    refresh_fault = soco.soap.SoapFault(
+        "Client.TokenRefreshRequired", "TokenRefreshRequired", detail
+    )
+
+    message = mock.Mock()
+    message.call.side_effect = [refresh_fault, refresh_fault]
+    monkeypatch.setattr(
+        soco.music_services.music_service,
+        "SoapMessage",
+        mock.Mock(return_value=message),
+    )
+
+    with pytest.raises(MusicServiceAuthException) as excinfo:
+        client.call("search", [("id", "artists"), ("term", "a")])
+    assert "Token refresh for Pandora failed" in str(excinfo.value)
+    # The token pair from the first fault should have been saved
+    client.token_store.save_token_pair.assert_called_once()
 
 
 def test_sonos_uri_from_id():

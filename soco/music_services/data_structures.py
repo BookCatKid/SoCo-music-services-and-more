@@ -61,6 +61,7 @@ from urllib.parse import quote as quote_url
 
 import logging
 from ..data_structures import DidlResource, DidlItem, SearchResult
+from ..exceptions import MusicServiceException
 from ..utils import camel_to_underscore
 
 _LOG = logging.getLogger(__name__)
@@ -112,14 +113,19 @@ def parse_response(service, response, search_type):
     )
     items = []
     # The result to be parsed is in either searchResult or getMetadataResult
+    if not isinstance(response, dict):
+        response = {}  # non-dict replies fail cleanly below
     if "searchResult" in response:
         response = response["searchResult"]
     elif "getMetadataResult" in response:
         response = response["getMetadataResult"]
     else:
-        raise ValueError(
+        # Some providers (eg PowerApp) reply without either key; fail cleanly.
+        raise MusicServiceException(
             '"response" should contain either the key '
-            '"searchResult" or "getMetadataResult"'
+            '"searchResult" or "getMetadataResult": {}'.format(
+                sorted(response)[:10] if isinstance(response, dict) else response
+            )
         )
 
     # Form the search metadata
@@ -206,8 +212,17 @@ class MetadataDictBase:
         self.metadata = {}
         for key, value in metadata_dict.items():
             if key in self._types:
-                convertion_callable = self._types[key]
-                value = convertion_callable(value)
+                # Keep the raw value if a provider sends a wrongly-typed field
+                try:
+                    value = self._types[key](value)
+                except (TypeError, ValueError):
+                    _LOG.debug(
+                        "Could not convert %s=%r to a %s for %s",
+                        key,
+                        value,
+                        self._types[key],
+                        self.__class__.__name__,
+                    )
             self.metadata[camel_to_underscore(key)] = value
 
     def __getattr__(self, key):
