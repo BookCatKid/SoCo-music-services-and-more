@@ -693,6 +693,112 @@ def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
     assert uri == "soco://spotify%3Atrack%3A2qs5ZcLByNTctJKbhAZ9JE?sid=204&sn=3"
 
 
+def test_get_extended_metadata_parses_related_items_and_text(monkeypatch):
+    extended = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <getExtendedMetadataResponse xmlns="http://www.sonos.com/Services/1.1">
+          <getExtendedMetadataResult>
+            <index>0</index><count>1</count><total>1</total>
+            <mediaCollection>
+              <id>related:1</id><itemType>container</itemType><title>Related</title>
+              <mediaMetadata>
+                <id>track:2</id><itemType>track</itemType><title>Another Track</title>
+                <trackMetadata><artist>Artist</artist></trackMetadata>
+              </mediaMetadata>
+            </mediaCollection>
+            <relatedText>
+              <type>ARTIST_BIO</type>
+              <text>Some biography text</text>
+            </relatedText>
+            <relatedPlay>
+              <id>radio:ra.1</id><itemType>program</itemType>
+              <title>Artist Radio</title><canPlay>true</canPlay>
+            </relatedPlay>
+          </getExtendedMetadataResult>
+        </getExtendedMetadataResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(post_responses=[FakeResponse(content=extended)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    data = music_browser.get_extended_metadata("track:1")
+
+    assert [item.title for item in data["items"]] == ["Another Track", "Artist Radio"]
+    assert data["items"][0].item_id == "track:2"
+    assert data["items"][1].item_id == "radio:ra.1"
+    assert data["items"][1].kind == "mediaMetadata"
+    assert data["text"] == [{"type": "ARTIST_BIO", "text": "Some biography text"}]
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "getExtendedMetadata")
+    assert browser._children(envelope, "id")[0].text == "track:1"
+
+
+def test_get_extended_metadata_text_returns_field(monkeypatch):
+    text_response = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <getExtendedMetadataTextResponse xmlns="http://www.sonos.com/Services/1.1">
+          <getExtendedMetadataTextResult>
+            The full biography...
+          </getExtendedMetadataTextResult>
+        </getExtendedMetadataTextResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(post_responses=[FakeResponse(content=text_response)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    text = music_browser.get_extended_metadata_text("track:1", "ARTIST_BIO")
+
+    assert text == "The full biography..."
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "getExtendedMetadataText")
+    assert browser._children(envelope, "type")[0].text == "ARTIST_BIO"
+
+
+def test_get_last_update_returns_change_timestamps(monkeypatch):
+    last_update = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <getLastUpdateResponse xmlns="http://www.sonos.com/Services/1.1">
+          <getLastUpdateResult>
+            <catalog>2024-01-01T00:00:00</catalog>
+            <favorites>2024-01-02T00:00:00</favorites>
+          </getLastUpdateResult>
+        </getLastUpdateResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(post_responses=[FakeResponse(content=last_update)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    data = music_browser.get_last_update()
+
+    assert data == {
+        "catalog": "2024-01-01T00:00:00",
+        "favorites": "2024-01-02T00:00:00",
+    }
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "getLastUpdate")
+
+
 def test_device_link_without_token_uses_get_session_id():
     session_response = b"""\
     <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">

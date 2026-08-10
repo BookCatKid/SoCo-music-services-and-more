@@ -1006,6 +1006,102 @@ class _ConfiguredSmapiClient:
             )
         return (results[0].text or "").strip() or None
 
+    def get_extended_metadata(self, object_id):
+        """Return related items and text for one item."""
+        try:
+            root = self._request_with_refresh(
+                "getExtendedMetadata", {"id": object_id}
+            )
+        except _BrowseSoapFault as fault:
+            if self._is_expired_fault(fault):
+                raise MusicServiceAuthException(str(fault)) from fault
+            raise fault.as_music_service_exception() from fault
+        results = _children(root, "getExtendedMetadataResult")
+        if not results:
+            raise MusicServiceException(
+                "getExtendedMetadata response did not contain a result"
+            )
+        result = results[0]
+        records = []
+        text_entries = []
+        for child in result:
+            name = _local_name(child.tag)
+            if name == "mediaCollection":
+                for node in child:
+                    provider_kind = _local_name(node.tag)
+                    if provider_kind == "relatedText":
+                        text_entries.append(
+                            {
+                                "type": _child_text(node, "type"),
+                                "text": _child_text(node, "text"),
+                            }
+                        )
+                    elif provider_kind in ("mediaCollection", "mediaMetadata"):
+                        record = _as_mapping(_element_value(node))
+                        if not record:
+                            continue
+                        record = dict(record)
+                        record["provider_kind"] = provider_kind
+                        record["kind"] = _legacy_item_kind(provider_kind, record)
+                        record["album_art_uri"] = _artwork_uri(record)
+                        records.append(record)
+            elif name == "relatedText":
+                text_entries.append(
+                    {
+                        "type": _child_text(child, "type"),
+                        "text": _child_text(child, "text"),
+                    }
+                )
+            elif name.startswith("related"):
+                # Provider-specific related items (eg Apple's relatedPlay radio).
+                record = _as_mapping(_element_value(child))
+                if not record:
+                    continue
+                record = dict(record)
+                record["provider_kind"] = "mediaMetadata"
+                record["kind"] = _legacy_item_kind("mediaMetadata", record)
+                record["album_art_uri"] = _artwork_uri(record)
+                records.append(record)
+        return {
+            "items": records,
+            "text": text_entries,
+            "raw": _as_mapping(_element_value(result)),
+        }
+
+    def get_extended_metadata_text(self, object_id, metadata_type):
+        """Return one extended-metadata text field (eg ``ARTIST_BIO``)."""
+        try:
+            root = self._request_with_refresh(
+                "getExtendedMetadataText",
+                {"id": object_id, "type": metadata_type},
+            )
+        except _BrowseSoapFault as fault:
+            if self._is_expired_fault(fault):
+                raise MusicServiceAuthException(str(fault)) from fault
+            raise fault.as_music_service_exception() from fault
+        results = _children(root, "getExtendedMetadataTextResult")
+        if not results:
+            raise MusicServiceException(
+                "getExtendedMetadataText response did not contain a result"
+            )
+        return (results[0].text or "").strip() or None
+
+    def get_last_update(self):
+        """Return catalog/favorites change timestamps from the provider."""
+        try:
+            root = self._request_with_refresh("getLastUpdate", {})
+        except _BrowseSoapFault as fault:
+            if self._is_expired_fault(fault):
+                raise MusicServiceAuthException(str(fault)) from fault
+            raise fault.as_music_service_exception() from fault
+        results = _children(root, "getLastUpdateResult")
+        if not results:
+            raise MusicServiceException(
+                "getLastUpdate response did not contain a result"
+            )
+        value = _as_mapping(_element_value(results[0]))
+        return dict(value) if value else {"value": value}
+
 
 class _BrowseSoapFault(Exception):
     """Internal representation of a provider SOAP fault."""
@@ -1554,3 +1650,24 @@ class MusicServiceBrowser:
         return "soco://{}?sid={}&sn={}".format(
             encoded, self.music_service.service_id, self.account.serial_number
         )
+
+    def get_extended_metadata(self, item):
+        """Return provider extended metadata (related items and text)."""
+        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
+        data = self._scoped_client().get_extended_metadata(object_id)
+        return {
+            "items": [_legacy_item(record) for record in data["items"]],
+            "text": data["text"],
+            "raw": data["raw"],
+        }
+
+    def get_extended_metadata_text(self, item, metadata_type):
+        """Return one extended-metadata text field for an item."""
+        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
+        return self._scoped_client().get_extended_metadata_text(
+            object_id, metadata_type
+        )
+
+    def get_last_update(self):
+        """Return provider catalog/favorites change timestamps."""
+        return self._scoped_client().get_last_update()
