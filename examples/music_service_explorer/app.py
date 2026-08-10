@@ -48,6 +48,12 @@ app = Flask(__name__)
 # few minutes - calling ListAvailableServices on every page view is wasteful.
 SERVICES_TTL = 300  # seconds
 
+# The configured-account payload arrives as the initial ZoneGroupTopology
+# event. Subscribing for it is comparatively slow and can occasionally miss
+# the event, so the app caches the fetched accounts and only re-subscribes
+# after the TTL - otherwise every search/browse call would hit the network.
+ACCOUNTS_TTL = 600  # seconds
+
 
 def _device():
     """The speaker that drives the app (a SoCo instance), cached briefly.
@@ -93,8 +99,34 @@ def _accounts_for(name):
     itself and passes the chosen one explicitly.
     """
     service_id = int(MusicService(name, device=_device()).service_id)
-    accounts = ConfiguredMusicServiceAccount.get_accounts(_device(), timeout=10)
+    accounts = _cached_accounts()
     return [a for a in accounts if a.service_id == service_id]
+
+
+def _cached_accounts():
+    """All configured household accounts, fetched at most once per TTL.
+
+    The account payload is the initial ZoneGroupTopology event, which is slow
+    to subscribe to and can occasionally not arrive at all. Caching avoids
+    doing that per request, and a failed capture degrades to an empty list so
+    a single flaky event can never take the whole app down.
+    """
+    now = time.time()
+    cached = getattr(app, "_accounts_cache", None)
+    if cached and now - cached[1] < ACCOUNTS_TTL:
+        return cached[0]
+    try:
+        accounts = ConfiguredMusicServiceAccount.get_accounts(
+            _device(), timeout=10
+        )
+    except Exception:  # pylint: disable=broad-except
+        app.logger.warning(
+            "Configured-account event capture failed; continuing without accounts",
+            exc_info=True,
+        )
+        accounts = []
+    app._accounts_cache = (accounts, now)
+    return accounts
 
 
 def _get_browser(name, account=None):
@@ -324,14 +356,9 @@ def index():
             )
         ]
         # Account capture subscribes to a ZoneGroupTopology event and can fail
-        # or time out in some households. Isolate it so the service catalog
-        # still renders when accounts are unavailable.
-        try:
-            raw_accounts = ConfiguredMusicServiceAccount.get_accounts(
-                device, timeout=10
-            )
-        except Exception:  # pylint: disable=broad-except
-            raw_accounts = []
+        # or time out in some households. The cache degrades to an empty list
+        # in that case so the service catalog still renders.
+        raw_accounts = _cached_accounts()
         # Some auto-added accounts (eg TuneIn) have no per-account token UDN,
         # so account_uid can't be derived for them. Show what we can and skip
         # only those entries rather than failing the whole page.
