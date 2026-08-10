@@ -1,0 +1,678 @@
+"""Tests for read-only configured music-service browsing."""
+
+import base64
+import hashlib
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from soco.exceptions import MusicServiceAuthException, MusicServiceException
+from soco.music_services import browser
+from soco.music_services.browser import (
+    ConfiguredMusicServiceAccount,
+    MusicServiceBrowseItem,
+    MusicServiceBrowser,
+)
+from soco.xml import XML
+
+
+ACCOUNT_XML = b"""\
+<MediaServers>
+  <Service
+    UDN="SA_RINCON52231_X_#Svc204-00abcdef-Token"
+    SerialNum0="3"
+    Username0="user@example.com"
+    Password0=""
+    Token0="token-value"
+    Key0="key-value"
+    Nickname0="Personal"
+    Tier0="paid" />
+</MediaServers>
+"""
+
+SMAPI_METADATA = b"""\
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <getMetadataResponse xmlns="http://www.sonos.com/Services/1.1">
+      <getMetadataResult>
+        <index>0</index><count>2</count><total>2</total>
+        <mediaCollection>
+          <id>library</id><itemType>container</itemType><title>Library</title>
+          <canEnumerate>true</canEnumerate>
+          <albumArtURI>https://img/${width}/${height}</albumArtURI>
+        </mediaCollection>
+        <mediaCollection>
+          <id>upsell-banner/foo</id><itemType>container</itemType><title>Upgrade</title>
+          <canPlay>true</canPlay>
+        </mediaCollection>
+      </getMetadataResult>
+    </getMetadataResponse>
+  </s:Body>
+</s:Envelope>
+"""
+
+SEARCH_RESPONSE = b"""\
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <searchResponse xmlns="http://www.sonos.com/Services/1.1">
+      <searchResult>
+        <count>1</count><total>1</total>
+        <mediaMetadata>
+          <id>track:1</id><itemType>track</itemType><title>Result</title>
+          <trackMetadata><artist>Artist</artist></trackMetadata>
+        </mediaMetadata>
+      </searchResult>
+    </searchResponse>
+  </s:Body>
+</s:Envelope>
+"""
+
+MEDIA_METADATA = b"""\
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <getMediaMetadataResponse xmlns="http://www.sonos.com/Services/1.1">
+      <getMediaMetadataResult>
+        <id>track:1</id><itemType>track</itemType><title>Result</title>
+        <trackMetadata><albumArtURI>https://img/cover.jpg</albumArtURI></trackMetadata>
+      </getMediaMetadataResult>
+    </getMediaMetadataResponse>
+  </s:Body>
+</s:Envelope>
+"""
+
+
+class FakeResponse:
+    """Small requests.Response stand-in used by transport tests."""
+
+    def __init__(self, status_code=200, content=b"", json_value=None):
+        self.status_code = status_code
+        self.content = content
+        self._json_value = json_value
+
+    def json(self):
+        if isinstance(self._json_value, Exception):
+            raise self._json_value
+        if self._json_value is None:
+            return json.loads(self.content.decode("utf-8"))
+        return self._json_value
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            response = SimpleNamespace(status_code=self.status_code)
+            error = browser.requests.HTTPError("HTTP {}".format(self.status_code))
+            error.response = response
+            raise error
+
+
+class FakeSession:
+    """Record HTTP calls and return queued responses."""
+
+    def __init__(self, get_responses=None, post_responses=None):
+        self.get_responses = list(get_responses or [])
+        self.post_responses = list(post_responses or [])
+        self.get_calls = []
+        self.post_calls = []
+
+    def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
+        return self.get_responses.pop(0)
+
+    def post(self, url, **kwargs):
+        self.post_calls.append((url, kwargs))
+        return self.post_responses.pop(0)
+
+
+class FakeService:
+    """MusicService-compatible descriptor used without network discovery."""
+
+    def __init__(
+        self,
+        name="Example",
+        service_id="204",
+        auth_type="AppLink",
+        capabilities="0",
+        manifest_uri=None,
+    ):
+        self.service_name = name
+        self.service_id = service_id
+        self.auth_type = auth_type
+        self.capabilities = capabilities
+        self.manifest_uri = manifest_uri
+        self.secure_uri = "https://example.invalid/smapi"
+        self.search_map = {"tracks": "search:track"}
+
+    def _get_search_prefix_map(self):
+        return self.search_map
+
+    @property
+    def available_search_categories(self):
+        return list(self.search_map)
+
+
+class FakeSystemProperties:
+    def GetString(self, args):  # pylint: disable=invalid-name
+        assert args == [("VariableName", "R_TrialZPSerial")]
+        return {"StringValue": "player-device-id"}
+
+
+class FakeDevice:
+    """The small SoCo surface the browser needs."""
+
+    household_id = "Sonos_household"
+    uid = "RINCON_000000000001400"
+    systemProperties = FakeSystemProperties()
+
+
+class FakeSubscription:
+    def __init__(self, event):
+        import queue
+
+        self.events = queue.Queue()
+        self.events.put(event)
+        self.unsubscribed = False
+
+    def unsubscribe(self):
+        self.unsubscribed = True
+
+
+class FakeZoneGroupTopology:
+    def __init__(self, event):
+        self.subscription = FakeSubscription(event)
+        self.requested_timeout = None
+
+    def subscribe(self, requested_timeout=None):
+        self.requested_timeout = requested_timeout
+        return self.subscription
+
+
+def make_account():
+    return ConfiguredMusicServiceAccount(
+        204,
+        3,
+        "SA_RINCON52231_X_#Svc204-00abcdef-Token",
+        token="token-value",
+        key="key-value",
+        nickname="Personal",
+    )
+
+
+def test_parse_configured_accounts():
+    accounts = ConfiguredMusicServiceAccount.from_payload(ACCOUNT_XML)
+
+    assert len(accounts) == 1
+    account = accounts[0]
+    assert account.service_id == 204
+    assert account.schema_revision == 7
+    assert account.serial_number == 3
+    assert account.nickname == "Personal"
+    assert account.token == "token-value"
+    assert account.key == "key-value"
+    assert account.account_uid == 0x00ABCDEF
+    assert "token-value" not in repr(account)
+
+
+def test_capture_accounts_reuses_zone_group_topology_subscription(monkeypatch):
+    event = SimpleNamespace(variables={"third_party_media_servers_x": "2:encoded"})
+    device = FakeDevice()
+    device.zoneGroupTopology = FakeZoneGroupTopology(event)
+    monkeypatch.setattr(
+        browser, "_decrypt_account_payload", lambda value, household: ACCOUNT_XML
+    )
+
+    accounts = ConfiguredMusicServiceAccount.get_accounts(device, timeout=4)
+
+    assert len(accounts) == 1
+    assert device.zoneGroupTopology.requested_timeout == 15
+    assert device.zoneGroupTopology.subscription.unsubscribed is True
+
+
+def test_account_payload_key_derivation_and_integrity(monkeypatch):
+    household = "Sonos_household"
+    iv = b"0" * 16
+    ciphertext = b"1" * 16
+    payload = b"<MediaServers />"
+    checked = payload + hashlib.md5(payload).digest()[:4]
+    raw = iv + ciphertext
+    encoded = "2:" + base64.b64encode(raw).decode("ascii")
+    observed = {}
+
+    def fake_decrypt(received_ciphertext, key, received_iv):
+        observed["ciphertext"] = received_ciphertext
+        observed["key"] = key
+        observed["iv"] = received_iv
+        return checked
+
+    monkeypatch.setattr(browser, "_aes_128_cbc_decrypt", fake_decrypt)
+
+    assert browser._decrypt_account_payload(encoded, household) == payload
+    global_key = hashlib.md5(household.encode("utf-8") + browser._ACCOUNT_SALT).digest()
+    assert observed == {
+        "ciphertext": ciphertext,
+        "key": hashlib.md5(iv + global_key).digest(),
+        "iv": iv,
+    }
+
+
+def test_account_payload_rejects_bad_integrity(monkeypatch):
+    encoded = "2:" + base64.b64encode(b"0" * 32).decode("ascii")
+    monkeypatch.setattr(browser, "_aes_128_cbc_decrypt", lambda *_args: b"payloadbad!")
+
+    with pytest.raises(MusicServiceException, match="integrity"):
+        browser._decrypt_account_payload(encoded, "Sonos_household")
+
+
+def test_smapi_get_metadata_preserves_provider_quirks_and_artwork():
+    session = FakeSession(post_responses=[FakeResponse(content=SMAPI_METADATA)])
+    client = browser._ConfiguredSmapiClient(
+        FakeService(capabilities=str(1 << 16)),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "America/Los_Angeles",
+        session=session,
+    )
+
+    page = client.get_metadata()
+
+    assert page["total"] == 2
+    assert page["items"][0]["kind"] == "mediaCollection"
+    assert page["items"][0]["album_art_uri"] == "https://img/400/400"
+    assert page["items"][1]["kind"] == "mediaMetadata"
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "timeZone")[0].text == "America/Los_Angeles"
+
+
+def test_capability_eight_moves_token_to_bearer_header():
+    session = FakeSession(post_responses=[FakeResponse(content=SMAPI_METADATA)])
+    client = browser._ConfiguredSmapiClient(
+        FakeService(capabilities="8"),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=session,
+    )
+
+    client.get_metadata()
+
+    _url, request = session.post_calls[0]
+    assert request["headers"]["Authorization"] == "Bearer token-value"
+    envelope = XML.fromstring(request["data"])
+    assert not browser._children(envelope, "token")
+    assert browser._children(envelope, "householdId")[0].text == FakeDevice.household_id
+
+
+def test_get_metadata_retries_transient_provider_fault():
+    fault = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body><s:Fault><faultcode>Server</faultcode><faultstring>Temporary</faultstring>
+        <detail><SonosError>999</SonosError></detail></s:Fault></s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(
+        post_responses=[FakeResponse(500, fault), FakeResponse(content=SMAPI_METADATA)]
+    )
+    client = browser._ConfiguredSmapiClient(
+        FakeService(),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=session,
+    )
+
+    assert client.get_metadata()["count"] == 2
+    assert len(session.post_calls) == 2
+
+
+def test_expired_token_does_not_refresh_unless_enabled():
+    fault = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body><s:Fault><faultcode>Client.AuthTokenExpired</faultcode>
+        <faultstring>Token Expired</faultstring><detail /></s:Fault></s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(post_responses=[FakeResponse(500, fault)])
+    client = browser._ConfiguredSmapiClient(
+        FakeService(),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        allow_credential_refresh=False,
+        session=session,
+    )
+
+    with pytest.raises(MusicServiceAuthException, match="AuthTokenExpired"):
+        client.get_metadata()
+
+
+def test_manifest_root_returns_sections_and_embedded_items(monkeypatch):
+    manifest = {
+        "endpoints": [
+            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
+        ]
+    }
+    page = {
+        "views": [
+            {
+                "id": {"objectId": "library"},
+                "displayType": "grid",
+                "content": {"container": {"name": "Library"}},
+                "total": 1,
+                "items": [
+                    {
+                        "id": {"objectId": "album:1"},
+                        "content": {
+                            "container": {
+                                "name": "Album",
+                                "type": "album",
+                                "canEnumerate": True,
+                                "imageUrl": "https://img/${width}/${height}/${ratio}",
+                            }
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    session = FakeSession(
+        get_responses=[FakeResponse(json_value=manifest), FakeResponse(json_value=page)]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+    root = music_browser.get_metadata()
+    library = root.items[0]
+    embedded = music_browser.get_metadata(library)
+
+    assert music_browser.root_transport == "content"
+    assert root.transport == "content"
+    assert library.source_transport == "content-section"
+    assert embedded.items[0].item_id == "album:1"
+    assert embedded.items[0].album_art_uri == "https://img/400/400/1x1"
+    _url, request = session.get_calls[1]
+    assert request["headers"]["X-Sonos-Device-Id"] == "Sonos_household_00abcdef"
+    assert request["headers"]["Authorization"] == "Bearer token-value"
+
+
+def test_content_child_switches_to_smapi_with_account_scoped_household(monkeypatch):
+    manifest = {
+        "endpoints": [
+            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
+        ]
+    }
+    session = FakeSession(
+        get_responses=[FakeResponse(json_value=manifest)],
+        post_responses=[FakeResponse(content=SMAPI_METADATA)],
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+    content_item = MusicServiceBrowseItem(
+        "library:albums", "Albums", "mediaCollection", source_transport="content"
+    )
+
+    child = music_browser.get_metadata(content_item)
+
+    assert child.transport == "smapi"
+    assert child.items[0].source_transport == "content"
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "householdId")[0].text == (
+        "Sonos_household_00abcdef"
+    )
+
+
+def test_manifest_without_browse_endpoint_falls_back_to_smapi(monkeypatch):
+    session = FakeSession(
+        get_responses=[FakeResponse(json_value={"endpoints": []})],
+        post_responses=[FakeResponse(content=SMAPI_METADATA)],
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    result = music_browser.get_metadata()
+
+    assert music_browser.root_transport == "smapi"
+    assert result.transport == "smapi"
+    assert len(session.post_calls) == 1
+
+
+def test_search_uses_existing_music_service_category_map(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SEARCH_RESPONSE)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    result = music_browser.search("tracks", "hello")
+
+    assert result.items[0].item_id == "track:1"
+    assert result.items[0].artist == "Artist"
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "id")[0].text == "search:track"
+    assert browser._children(envelope, "term")[0].text == "hello"
+
+
+def test_get_media_metadata_is_read_only(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=MEDIA_METADATA)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    metadata = music_browser.get_media_metadata("track:1")
+
+    assert metadata["id"] == "track:1"
+    assert metadata["album_art_uri"] == "https://img/cover.jpg"
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "getMediaMetadata")
+    assert not browser._children(envelope, "AddAccountX")
+    assert not browser._children(envelope, "AddOAuthAccountX")
+
+
+def test_device_link_without_token_uses_get_session_id():
+    session_response = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <getSessionIdResponse xmlns="http://www.sonos.com/Services/1.1">
+          <getSessionIdResult>session-123</getSessionIdResult>
+        </getSessionIdResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    account = ConfiguredMusicServiceAccount(
+        204,
+        3,
+        "SA_RINCON52231_X_#Svc204-00abcdef-Token",
+        username="user",
+        password="password",
+    )
+    session = FakeSession(
+        post_responses=[
+            FakeResponse(content=session_response),
+            FakeResponse(content=SMAPI_METADATA),
+        ]
+    )
+    client = browser._ConfiguredSmapiClient(
+        FakeService(auth_type="DeviceLink"),
+        account,
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=session,
+    )
+
+    client.get_metadata()
+
+    first = XML.fromstring(session.post_calls[0][1]["data"])
+    second = XML.fromstring(session.post_calls[1][1]["data"])
+    assert browser._children(first, "getSessionId")
+    assert browser._children(second, "sessionId")[0].text == "session-123"
+
+
+def test_user_id_password_credentials_stay_in_soap():
+    account = ConfiguredMusicServiceAccount(
+        204,
+        3,
+        "SA_RINCON52231_X_#Svc204-00abcdef-Token",
+        username="user",
+        password="password",
+    )
+    session = FakeSession(post_responses=[FakeResponse(content=SMAPI_METADATA)])
+    client = browser._ConfiguredSmapiClient(
+        FakeService(auth_type="UserIdPassword"),
+        account,
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=session,
+    )
+
+    client.get_metadata()
+
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "username")[0].text == "user"
+    assert browser._children(envelope, "password")[0].text == "password"
+    assert "Authorization" not in request["headers"]
+
+
+def test_embedded_refresh_credentials_are_accepted_only_when_enabled():
+    refresh_fault = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body><s:Fault>
+        <faultcode>Client.TokenRefreshRequired</faultcode>
+        <faultstring>Token Expired</faultstring>
+        <detail>
+          <RefreshAuthTokenResult xmlns="http://www.sonos.com/Services/1.1">
+            <authToken>replacement-token</authToken>
+            <privateKey>replacement-key</privateKey>
+          </RefreshAuthTokenResult>
+        </detail>
+      </s:Fault></s:Body>
+    </s:Envelope>
+    """
+    account = make_account()
+    session = FakeSession(
+        post_responses=[
+            FakeResponse(500, refresh_fault),
+            FakeResponse(content=SMAPI_METADATA),
+        ]
+    )
+    client = browser._ConfiguredSmapiClient(
+        FakeService(),
+        account,
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        allow_credential_refresh=True,
+        session=session,
+    )
+
+    client.get_metadata()
+
+    assert account.token == "replacement-token"
+    assert account.key == "replacement-key"
+    assert len(session.post_calls) == 2
+
+
+def test_malformed_sonos_radio_xsi_prefix_is_repaired():
+    malformed = SMAPI_METADATA.replace(
+        b"<index>0</index>", b'<index xsi:nil="true">0</index>'
+    )
+    session = FakeSession(post_responses=[FakeResponse(content=malformed)])
+    client = browser._ConfiguredSmapiClient(
+        FakeService(),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=session,
+    )
+
+    assert client.get_metadata()["count"] == 2
+
+
+def test_multiple_configured_accounts_require_explicit_selection(monkeypatch):
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    first = make_account()
+    second = make_account()
+    second.serial_number = 4
+    monkeypatch.setattr(
+        ConfiguredMusicServiceAccount,
+        "get_accounts",
+        lambda *_args, **_kwargs: [first, second],
+    )
+
+    with pytest.raises(MusicServiceAuthException, match="Multiple Example accounts"):
+        MusicServiceBrowser("Example", device=FakeDevice(), session=FakeSession())
+
+
+def test_anonymous_service_does_not_capture_account_event(monkeypatch):
+    service = FakeService(auth_type="Anonymous")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+
+    def should_not_run(*_args, **_kwargs):
+        raise AssertionError("anonymous browsing should not inspect accounts")
+
+    monkeypatch.setattr(ConfiguredMusicServiceAccount, "get_accounts", should_not_run)
+    music_browser = MusicServiceBrowser(
+        "Example", device=FakeDevice(), session=FakeSession()
+    )
+
+    assert music_browser.account.serial_number == 0
+    assert music_browser.account.token == ""
+
+
+def test_content_http_401_does_not_refresh_by_default(monkeypatch):
+    manifest = {
+        "endpoints": [
+            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
+        ]
+    }
+    session = FakeSession(
+        get_responses=[FakeResponse(json_value=manifest), FakeResponse(status_code=401)]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    with pytest.raises(MusicServiceAuthException, match="HTTP 401"):
+        music_browser.get_metadata()
+
+    assert len(session.get_calls) == 2

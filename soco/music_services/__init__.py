@@ -4,5 +4,18 @@ with Sonos."""
 
 from .music_service import MusicService
 from .accounts import Account
+from .browser import (
+    ConfiguredMusicServiceAccount,
+    MusicServiceBrowseItem,
+    MusicServiceBrowseResult,
+    MusicServiceBrowser,
+)
 
-__all__ = ["MusicService", "Account"]
+__all__ = [
+    "MusicService",
+    "Account",
+    "ConfiguredMusicServiceAccount",
+    "MusicServiceBrowseItem",
+    "MusicServiceBrowseResult",
+    "MusicServiceBrowser",
+]
