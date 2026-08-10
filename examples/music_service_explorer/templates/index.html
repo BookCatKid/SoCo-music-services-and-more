@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoCo · Music Service Explorer</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e8eaf0;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --accent-2: #8f6bff;
+    --ok: #3ecf8e;
+    --warn: #ffb454;
+    --err: #ff6b6b;
+    --mono: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 22px; background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  .device-chip {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; color: var(--muted);
+    font-size: 12px; font-family: var(--mono);
+  }
+  .chip { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+  .chip b { color: var(--text); font-weight: 600; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 60px); }
+  aside {
+    border-right: 1px solid var(--border); background: var(--panel);
+    padding: 16px; overflow-y: auto; max-height: calc(100vh - 60px);
+  }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 6px 0 10px; }
+  .service-list { display: flex; flex-direction: column; gap: 2px; }
+  .service-item {
+    display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px;
+    cursor: pointer; border: 1px solid transparent; color: var(--text);
+    transition: background .12s, border-color .12s;
+  }
+  .service-item:hover { background: var(--panel-2); }
+  .service-item.active { background: var(--panel-2); border-color: var(--accent); }
+  .service-item .logo {
+    width: 30px; height: 30px; border-radius: 7px; background: var(--panel-2);
+    display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--accent);
+    overflow: hidden; flex: none;
+  }
+  .service-item .logo img { width: 100%; height: 100%; object-fit: cover; }
+  .service-item .meta { min-width: 0; }
+  .service-item .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .service-item .sub { font-size: 11px; color: var(--muted); }
+  .badge { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .badge.auth { border-color: rgba(79,140,255,.4); color: #9db9ff; }
+  main { padding: 22px 26px; max-width: 1100px; width: 100%; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; }
+  .empty .big { font-size: 34px; margin-bottom: 8px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; flex-wrap: wrap; }
+  .tab {
+    padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; color: var(--muted);
+    font-weight: 600; font-size: 13px; border: 1px solid transparent; border-bottom: none;
+    transition: color .12s, background .12s;
+  }
+  .tab:hover { color: var(--text); background: var(--panel); }
+  .tab.active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+  .tab[data-error="1"] { color: var(--err); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .panel h3 { margin: 0 0 12px; font-size: 14px; }
+  .panel h3 code { color: var(--accent); font-family: var(--mono); font-size: 13px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input, select, button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; font-family: inherit;
+    transition: border-color .12s;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.secondary { background: var(--panel-2); color: var(--text); border-color: var(--border); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+  .card {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; cursor: pointer; transition: border-color .12s, transform .12s;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .card .title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .tags { margin-top: 8px; display: flex; gap: 5px; flex-wrap: wrap; }
+  .card .tags .badge { color: var(--accent); border-color: rgba(79,140,255,.35); }
+  .card .tags .badge.variant { color: var(--accent-2); border-color: rgba(143,107,255,.4); }
+  .crumb { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; font-size: 12px; }
+  .crumb button { padding: 4px 10px; font-size: 12px; }
+  .crumb .sep { color: var(--muted); }
+  .crumb .here { color: var(--muted); font-family: var(--mono); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  pre {
+    background: #0b0d11; border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    font-family: var(--mono); font-size: 12px; overflow: auto; max-height: 420px; color: #cfe0ff;
+  }
+  .kv { display: grid; grid-template-columns: 220px 1fr; gap: 6px 14px; font-size: 13px; }
+  .kv .k { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .kv .v { word-break: break-all; }
+  .kv .v code { color: var(--accent); font-family: var(--mono); font-size: 12px; }
+  .msg { padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13px; }
+  .msg.err { background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.3); color: var(--err); }
+  .msg.ok { background: rgba(62,207,142,.08); border: 1px solid rgba(62,207,142,.3); color: var(--ok); }
+  .msg.warn { background: rgba(255,180,84,.08); border: 1px solid rgba(255,180,84,.3); color: var(--warn); }
+  .muted { color: var(--muted); }
+  .snippet { margin-top: 14px; }
+  .snippet summary { cursor: pointer; color: var(--muted); font-size: 12px; font-family: var(--mono); user-select: none; }
+  .accounts { display: flex; flex-direction: column; gap: 6px; }
+  .acct { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+  .acct .nick { font-weight: 600; }
+  .acct .sub { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .hidden { display: none !important; }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    aside { max-height: 260px; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SoCo <span>Music Service Explorer</span></h1>
+  <div class="device-chip">
+    {% if device %}
+      <span class="chip">📻 <b>{{ device.name }}</b></span>
+      <span class="chip">IP <b>{{ device.ip }}</b></span>
+      <span class="chip">{{ device.uid }}</span>
+      <span class="chip">{{ device.household_id }}</span>
+    {% endif %}
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <h2>Music services (<span id="service-count">{{ services|length }}</span>)</h2>
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; color:var(--muted);">
+      <input type="checkbox" id="configured-only" checked style="accent-color:var(--accent);">
+      <label for="configured-only" style="cursor:pointer;">Only accounts added to this system</label>
+    </div>
+    <div class="service-list" id="service-list">
+      {% for s in services %}
+      <div class="service-item" data-name="{{ s.name | e }}" data-id="{{ s.id }}"
+           data-configured="{{ '1' if s.id in configured_service_ids else '0' }}"
+           onclick="selectService(this)">
+        <div class="logo"><span>{{ s.name[:1] }}</span></div>
+        <div class="meta">
+          <div class="name">{{ s.name }} {% if s.id in configured_service_ids %}<span class="badge" style="color:var(--ok); border-color:rgba(62,207,142,.4);">added</span>{% endif %}</div>
+          <div class="sub">sid {{ s.id }} · {{ s.auth }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <main id="main">
+    {% if error %}
+      <div class="msg err">{{ error }}</div>
+    {% endif %}
+    {% if not device %}
+      <div class="empty">
+        <div class="big">📡</div>
+        <p>No Sonos speaker found. Is one powered on and on the network?</p>
+      </div>
+    {% else %}
+    <div class="empty" id="welcome">
+      <div class="big">🎛️</div>
+      <h2>Pick a music service from the left</h2>
+      <p class="muted">Explore every read-only soco music-service feature: search (with variants),<br>
+      browse, media metadata, extended metadata, descriptors &amp; more — no playback.</p>
+      {% if accounts %}
+      <div style="text-align:left; max-width:560px; margin: 26px auto;">
+        <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:1px;">Configured household accounts</h3>
+        <div class="accounts">
+          {% for a in accounts %}
+          <div class="acct">
+            <span class="nick">{{ a.nickname or "unnamed" }}</span>
+            <span class="sub">sid {{ a.service_id }} · uid {{ a.account_uid }} · {{ a.tier or "?" }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    <div id="detail" class="hidden">
+      <div class="tabs">
+        <div class="tab active" data-tab="info" onclick="switchTab('info')">ℹ️ Service info</div>
+        <div class="tab" data-tab="search" onclick="switchTab('search')">🔍 Search</div>
+        <div class="tab" data-tab="browse" onclick="switchTab('browse')">📂 Browse</div>
+        <div class="tab" data-tab="metadata" onclick="switchTab('metadata')">🏷️ Item metadata</div>
+      </div>
+      <div id="tab-info"></div>
+      <div id="tab-search" class="hidden"></div>
+      <div id="tab-browse" class="hidden"></div>
+      <div id="tab-metadata" class="hidden"></div>
+    </div>
+    {% endif %}
+  </main>
+</div>
+
+<script>
+const state = { service: null, tab: "info", browseStack: [], browsePage: 0 };
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+// Filter the sidebar to services that have an account added to the household.
+document.getElementById("configured-only").addEventListener("change", (ev) => {
+  const only = ev.target.checked;
+  let visible = 0;
+  document.querySelectorAll(".service-item").forEach((item) => {
+    const show = !only || item.dataset.configured === "1";
+    item.classList.toggle("hidden", !show);
+    if (show) visible += 1;
+  });
+  document.getElementById("service-count").textContent = visible;
+});
+
+async function api(path) {
+  const res = await fetch(path);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
+function badge(label, cls) { return `<span class="badge ${cls || ""}">${esc(label)}</span>`; }
+
+function selectService(el) {
+  document.querySelectorAll(".service-item").forEach(n => n.classList.remove("active"));
+  el.classList.add("active");
+  state.service = el.dataset.name;
+  state.browseStack = []; state.browsePage = 0;
+  document.getElementById("welcome").classList.add("hidden");
+  document.getElementById("detail").classList.remove("hidden");
+  switchTab("info");
+}
+
+function switchTab(name) {
+  state.tab = name;
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  ["info", "search", "browse", "metadata"].forEach(t =>
+    document.getElementById("tab-" + t).classList.toggle("hidden", t !== name));
+  if (name === "info") loadInfo();
+  if (name === "search") loadSearch();
+  if (name === "browse") loadBrowse();
+  if (name === "metadata") loadMetadataForm();
+}
+
+function snippet(title, code) {
+  return `<details class="snippet"><summary>▸ soco code — ${esc(title)}</summary><pre>${esc(code)}</pre></details>`;
+}
+
+/* ---------------- Service info ---------------- */
+async function loadInfo() {
+  const el = document.getElementById("tab-info");
+  el.innerHTML = '<div class="msg"><span class="spinner"></span> Loading service info…</div>';
+  try {
+    const info = await api(`/api/info?service=${encodeURIComponent(state.service)}`);
+    const cats = await api(`/api/categories?service=${encodeURIComponent(state.service)}`);
+    const variantHtml = Object.entries(cats.variants || {}).map(([cat, vs]) =>
+      `<div class="row" style="gap:6px"><code style="color:var(--accent)">${esc(cat)}</code>` +
+      vs.map(v => badge(v)).join("") + `</div>`).join("");
+    el.innerHTML = `
+      <div class="panel">
+        <h3>Descriptor <code>ListAvailableServices</code></h3>
+        <div class="kv">
+          ${["service_name","service_id","service_type","auth_type","version","container_type","uri","secure_uri","presentation_map_uri","manifest_uri","desc"].map(k =>
+            `<div class="k">${k}</div><div class="v"><code>${esc(info[k])}</code></div>`).join("")}
+          <div class="k">capabilities</div><div class="v"><code>${esc(info.capabilities)}</code></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Search categories &amp; variants <code>available_search_categories / available_search_variants</code></h3>
+        <div class="kv">${variantHtml || '<div class="v muted">No search categories advertised</div>'}</div>
+        <p class="hint">Variants scope the same category differently (e.g. Apple Music: whole catalog vs. your library).</p>
+        ${snippet("MusicService search surface", `service = MusicService("${state.service}", device=soco)\nservice.available_search_categories      # ['artists', 'albums', ...]\nservice.available_search_variants        # {'artists': ['SearchTitle', 'LibrarySearchTitle'], ...}\nservice.desc                             # sonos descriptor for DIDL metadata\nservice.sonos_uri_from_id('artist:44984')# soco://… URI for queueing (never queued here!)`)}
+      </div>`;
+  } catch (e) { el.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Search ---------------- */
+let searchState = null;
+async function loadSearch() {
+  const el = document.getElementById("tab-search");
+  if (searchState && searchState.service === state.service) return; // keep form state
+  searchState = { service: state.service, api: "browser", category: "", variant: "all", term: "" };
+  try {
+    const cats = await api(`/api/categories?service=${encodeURIComponent(state.service)}`);
+    const categories = Object.keys(cats.variants || {});
+    const variants = cats.variants || {};
+    el.innerHTML = `
+      <div class="panel">
+        <h3>Search <code>MusicService.search() / MusicServiceBrowser.search()</code></h3>
+        <div class="row">
+          <select id="s-api">
+            <option value="browser">MusicServiceBrowser (account-aware)</option>
+            <option value="legacy">MusicService (legacy, token store)</option>
+          </select>
+          <select id="s-cat"><option value="">— category —</option>
+            ${categories.map(c => `<option>${esc(c)}</option>`).join("")}
+          </select>
+          <select id="s-var"><option value="all">all variants</option></select>
+          <input id="s-term" placeholder="search term…" value="">
+          <button onclick="runSearch()">Search</button>
+        </div>
+        <div class="hint" id="s-hint"></div>
+      </div>
+      <div id="s-results"></div>`;
+    const catSel = document.getElementById("s-cat");
+    const varSel = document.getElementById("s-var");
+    catSel.onchange = () => {
+      const vs = variants[catSel.value] || [];
+      varSel.innerHTML = `<option value="all">all variants</option>` +
+        vs.map(v => `<option>${esc(v)}</option>`).join("");
+      document.getElementById("s-hint").textContent =
+        `Variants for '${catSel.value}': ${vs.join(", ") || "none"}`;
+    };
+    const apiSel = document.getElementById("s-api");
+    apiSel.onchange = () => {
+      document.getElementById("s-hint").textContent =
+        apiSel.value === "browser"
+          ? "Uses the credentials Sonos already stores for this household (no token setup needed)."
+          : "Legacy SMAPI path with JsonFileTokenStore auth.";
+    };
+  } catch (e) { el.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+async function runSearch() {
+  const cat = document.getElementById("s-cat").value;
+  const term = document.getElementById("s-term").value.trim();
+  if (!cat) return;
+  const apiSel = document.getElementById("s-api").value;
+  const variant = document.getElementById("s-var").value;
+  state.searchPage = 0;
+  await fetchSearch(cat, term, apiSel, variant, 0);
+}
+
+async function fetchSearch(cat, term, apiSel, variant, page) {
+  const box = document.getElementById("s-results");
+  box.innerHTML = '<div class="msg"><span class="spinner"></span> Searching…</div>';
+  try {
+    const data = await api(`/api/search?service=${encodeURIComponent(state.service)}` +
+      `&category=${encodeURIComponent(cat)}&term=${encodeURIComponent(term)}` +
+      `&variant=${encodeURIComponent(variant)}&api=${apiSel}&index=${page * 20}&count=20`);
+    const items = (data.items || []).map(it => `
+      <div class="card" data-id="${esc(it.id)}">
+        <div class="title">${esc(it.title) || "(untitled)"}</div>
+        <div class="sub">${esc(it.artist || it.type || "")}</div>
+        <div class="tags">${badge(it.type || "item")}${it.variant ? badge(it.variant, "variant") : ""}</div>
+      </div>`).join("");
+    const hasMore = data.number_returned >= 20;
+    box.innerHTML = `
+      <div class="msg ok">${items ? `${data.number_returned} returned · ${data.total_matches ?? "?"} total matches` : "No results"}</div>
+      <div class="grid" id="s-grid">${items}</div>
+      ${hasMore ? `<div class="pager"><button class="secondary" id="s-next">Next page ➡</button></div>` : ""}`;
+    const grid = document.getElementById("s-grid");
+    if (grid) grid.onclick = (ev) => {
+      const card = ev.target.closest(".card");
+      if (card) fillMetadata(card.dataset.id);
+    };
+    const next = document.getElementById("s-next");
+    if (next) next.onclick = () => fetchSearch(cat, term, apiSel, variant, page + 1);
+  } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Browse ---------------- */
+async function loadBrowse() {
+  const el = document.getElementById("tab-browse");
+  el.innerHTML = `
+    <div class="panel">
+      <h3>Browse <code>get_metadata()</code></h3>
+      <div class="row">
+        <select id="b-api">
+          <option value="browser">MusicServiceBrowser</option>
+          <option value="legacy">MusicService</option>
+        </select>
+        <label class="muted"><input type="checkbox" id="b-rec"> recursive</label>
+        <button class="secondary" onclick="loadBrowseRoot()">Browse root</button>
+      </div>
+      <div class="crumb hidden" id="b-crumb"></div>
+      <div class="hint" id="b-hint">Browse the service's root container, then click into any container.</div>
+    </div>
+    <div id="b-results"></div>`;
+}
+
+async function loadBrowseRoot() {
+  state.browseStack = [];
+  state.browsePage = 0;
+  await fetchBrowse("root", 0);
+}
+
+async function goToCrumb(index) {
+  state.browseStack = state.browseStack.slice(0, index + 1);
+  state.browsePage = 0;
+  const target = state.browseStack[index];
+  await fetchBrowse(target.id, 0, target.transport);
+}
+
+async function fetchBrowse(id, page, transport) {
+  const box = document.getElementById("b-results");
+  const apiSel = document.getElementById("b-api").value;
+  const recursive = document.getElementById("b-rec").checked ? "1" : "0";
+  state.browsePage = page;
+  box.innerHTML = '<div class="msg"><span class="spinner"></span> Browsing…</div>';
+  try {
+    const data = await api(`/api/browse?service=${encodeURIComponent(state.service)}` +
+      `&item=${encodeURIComponent(id)}&transport=${encodeURIComponent(transport || "")}` +
+      `&api=${apiSel}&index=${page * 20}&count=20&recursive=${recursive}`);
+    const crumb = document.getElementById("b-crumb");
+    if (state.browseStack.length) {
+      crumb.classList.remove("hidden");
+      crumb.innerHTML = `<button class="secondary" onclick="loadBrowseRoot()">⬅ root</button>` +
+        state.browseStack.map((s, i) =>
+          `<span class="sep">/</span><button class="secondary" onclick="goToCrumb(${i})">${esc(s.title.length > 20 ? s.title.slice(0, 20) + "…" : s.title)}</button>`).join("");
+    } else {
+      crumb.classList.add("hidden");
+    }
+    const items = (data.items || []).map(it => `
+      <div class="card" data-id="${esc(it.id)}" data-transport="${esc(it.transport || "")}" data-canbrowse="${it.can_browse ? 1 : 0}">
+        <div class="title">${esc(it.title) || "(untitled)"}</div>
+        <div class="sub">${esc(it.artist || "")}</div>
+        <div class="tags">${badge(it.type || "item")}${it.variant ? badge(it.variant, "variant") : ""}${it.can_browse ? badge("📂 container") : ""}</div>
+      </div>`).join("");
+    const hasMore = data.number_returned >= 20;
+    box.innerHTML = `
+      <div class="msg ok">${data.number_returned} returned · ${data.total_matches ?? "?"} total</div>
+      <div class="grid" id="b-grid">${items || '<div class="muted">Empty container</div>'}</div>
+      ${hasMore ? `<div class="pager"><button class="secondary" id="b-next">Next page ➡</button></div>` : ""}`;
+    const grid = document.getElementById("b-grid");
+    if (grid) {
+      grid.onclick = (ev) => {
+        const card = ev.target.closest(".card");
+        if (!card) return;
+        if (card.dataset.canbrowse === "1") {
+          // Push the container we're entering so back-navigation works.
+          state.browseStack = [...state.browseStack, { id: card.dataset.id, title: card.querySelector(".title").textContent, transport: card.dataset.transport }];
+          fetchBrowse(card.dataset.id, 0, card.dataset.transport);
+        } else {
+          fillMetadata(card.dataset.id);
+        }
+      };
+    }
+    const next = document.getElementById("b-next");
+    if (next) next.onclick = () => fetchBrowse(id, page + 1, transport);
+  } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Item metadata ---------------- */
+async function loadMetadataForm() {
+  const el = document.getElementById("tab-metadata");
+  el.innerHTML = `
+    <div class="panel">
+      <h3>Item metadata <code>get_media_metadata() / get_extended_metadata()</code></h3>
+      <div class="row">
+        <select id="m-api">
+          <option value="browser">MusicServiceBrowser</option>
+          <option value="legacy">MusicService</option>
+        </select>
+        <input id="m-item" placeholder="item id, e.g. artist:44984" style="flex:1; min-width:220px">
+        <button onclick="runMetadata()">Fetch</button>
+      </div>
+      <p class="hint">Find an item id via Search or Browse, then paste it here.</p>
+    </div>
+    <div id="m-results"></div>`;
+}
+
+function fillMetadata(id) {
+  document.getElementById("m-item").value = id;
+  switchTab("metadata");
+  runMetadata();
+}
+
+async function runMetadata() {
+  const id = document.getElementById("m-item").value.trim();
+  if (!id) return;
+  const apiSel = document.getElementById("m-api").value;
+  const box = document.getElementById("m-results");
+  box.innerHTML = '<div class="msg"><span class="spinner"></span> Fetching…</div>';
+  try {
+    const data = await api(`/api/metadata?service=${encodeURIComponent(state.service)}` +
+      `&item=${encodeURIComponent(id)}&api=${apiSel}`);
+    box.innerHTML = `<pre>${esc(JSON.stringify(data.metadata, null, 2))}</pre>` +
+      snippet("get_media_metadata", `service = MusicService("${state.service}", device=soco)\nservice.get_media_metadata("${esc(id)}")`);
+  } catch (e) {
+    box.innerHTML = `<div class="msg err">${esc(e.message)}</div>` +
+      (e.message && e.message.includes("Auth")
+        ? `<div class="msg warn">Some token-based providers reject metadata calls through the browser client — switch the API dropdown to “MusicService (legacy)” and try again.</div>`
+        : "");
+  }
+}
+</script>
+</body>
+</html>
