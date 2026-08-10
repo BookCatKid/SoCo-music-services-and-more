@@ -424,6 +424,46 @@ def test_search_single_variant(monkeypatch):
     assert result[0].item_id.endswith("artist%3A9")
 
 
+def test_get_metadata_with_sort(monkeypatch):
+    apple = _apple_music_service(monkeypatch)
+
+    def fake_call(method, parameters=None):
+        assert method == "getMetadata"
+        params = dict(parameters or [])
+        assert params["sortOrder"] == "Artist"
+        assert params["sortAscending"] == 0
+        return {
+            "getMetadataResult": {
+                "count": 1,
+                "mediaCollection": [
+                    {"id": "album:1", "itemType": "album", "title": "Album"}
+                ],
+            }
+        }
+
+    apple.soap_client.call = fake_call
+
+    result = apple.get_metadata("root", sort_order="Artist", sort_ascending=False)
+
+    assert len(result) == 1
+
+
+def test_get_metadata_omits_sort_when_unset(monkeypatch):
+    apple = _apple_music_service(monkeypatch)
+
+    def fake_call(method, parameters=None):
+        params = dict(parameters or [])
+        assert "sortOrder" not in params
+        assert "sortAscending" not in params
+        return {"getMetadataResult": {"count": 0, "mediaCollection": []}}
+
+    apple.soap_client.call = fake_call
+
+    result = apple.get_metadata("root")
+
+    assert len(result) == 0
+
+
 def test_search():
     spotify = MusicService("Spotify")
     # Set up dummy search categories

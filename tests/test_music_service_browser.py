@@ -803,6 +803,42 @@ def test_get_last_update_returns_change_timestamps(monkeypatch):
     assert browser._children(envelope, "getLastUpdate")
 
 
+def test_get_metadata_sends_sort_params(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SMAPI_METADATA)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    music_browser.get_metadata("library", sort_order="Artist", sort_ascending=False)
+
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    op = browser._children(envelope, "getMetadata")[0]
+    fields = {browser._local_name(node.tag): node.text or "" for node in op}
+    assert fields["sortOrder"] == "Artist"
+    assert fields["sortAscending"] == "false"
+
+
+def test_get_metadata_omits_sort_params_when_unset(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SMAPI_METADATA)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    music_browser.get_metadata("library")
+
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    op = browser._children(envelope, "getMetadata")[0]
+    fields = {browser._local_name(node.tag): node.text or "" for node in op}
+    assert "sortOrder" not in fields
+    assert "sortAscending" not in fields
+
+
 def test_device_link_without_token_uses_get_session_id():
     session_response = b"""\
     <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">

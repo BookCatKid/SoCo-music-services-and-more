@@ -393,10 +393,22 @@ class _ConfiguredSmapiClient:
             self._ensure_session()
             return self._request(action, fields)
 
-    def get_metadata(self, object_id="root", index=0, count=100, recursive=False):
+    def get_metadata(
+        self,
+        object_id="root",
+        index=0,
+        count=100,
+        recursive=False,
+        sort_order=None,
+        sort_ascending=None,
+    ):
         fields = {"id": object_id, "index": str(index), "count": str(count)}
         if recursive:
             fields["recursive"] = "true"
+        if sort_order:
+            fields["sortOrder"] = str(sort_order)
+        if sort_ascending is not None:
+            fields["sortAscending"] = "true" if sort_ascending else "false"
 
         for attempt in range(3):
             try:

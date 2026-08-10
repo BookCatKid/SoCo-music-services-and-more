@@ -292,13 +292,22 @@ class MusicServiceBrowser:
             raw=page,
         )
 
-    def get_metadata(self, item="root", index=0, count=100, recursive=False):
+    def get_metadata(
+        self,
+        item="root",
+        index=0,
+        count=100,
+        recursive=False,
+        sort_order=None,
+        sort_ascending=None,
+    ):
         """Browse a root/container using the desktop controller's transport flow.
 
         Passing a :class:`MusicServiceBrowseItem` from a previous result keeps
         the transport provenance required by newer providers. A plain string ID
         is treated as an ordinary legacy SMAPI ID for backwards-predictable
-        behavior.
+        behavior. ``sort_order``/``sort_ascending`` are forwarded to the
+        provider when given; not all containers support sorting.
         """
         if isinstance(item, MusicServiceBrowseItem):
             object_id = item.item_id
@@ -317,7 +326,9 @@ class MusicServiceBrowser:
 
         client = self._scoped_client(from_content_page)
         try:
-            page = client.get_metadata(object_id, index, count, recursive)
+            page = client.get_metadata(
+                object_id, index, count, recursive, sort_order, sort_ascending
+            )
         finally:
             if client is not self._client:
                 self._client.session_id = client.session_id

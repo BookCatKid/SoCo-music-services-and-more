@@ -918,7 +918,15 @@ class MusicService:
     #    search(xs:string id, xs:string term, xs:string index, xs:int count)
     #    setPlayedSeconds(id id, xs:int seconds)
 
-    def get_metadata(self, item="root", index=0, count=100, recursive=False):
+    def get_metadata(
+        self,
+        item="root",
+        index=0,
+        count=100,
+        recursive=False,
+        sort_order=None,
+        sort_ascending=None,
+    ):
         """Get metadata for a container or item.
 
         Args:
@@ -929,6 +937,10 @@ class MusicService:
             count (int): The maximum number of items to return. Default 100.
             recursive (bool): Whether the browse should recurse into sub-items
                 (Does not always work). Defaults to `False`.
+            sort_order (str, optional): A provider-supported sort key such as
+                ``'Artist'`` or ``'Album'``. Only sent when provided.
+            sort_ascending (bool, optional): Whether the sort is ascending.
+                Only sent when provided.
 
         Returns:
             ~collections.OrderedDict: The item or container's metadata,
@@ -943,15 +955,17 @@ class MusicService:
             item_id = item.id  # pylint: disable=no-member
         else:
             item_id = item
-        response = self.soap_client.call(
-            "getMetadata",
-            [
-                ("id", item_id),
-                ("index", index),
-                ("count", count),
-                ("recursive", 1 if recursive else 0),
-            ],
-        )
+        args = [
+            ("id", item_id),
+            ("index", index),
+            ("count", count),
+            ("recursive", 1 if recursive else 0),
+        ]
+        if sort_order:
+            args.append(("sortOrder", sort_order))
+        if sort_ascending is not None:
+            args.append(("sortAscending", 1 if sort_ascending else 0))
+        response = self.soap_client.call("getMetadata", args)
         return parse_response(self, response, "browse")
 
     def search(self, category, term="", index=0, count=100, variant=None):
