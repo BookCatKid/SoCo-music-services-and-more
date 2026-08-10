@@ -285,6 +285,24 @@ class TestMetadataDictBase:
         # And that title has been left unchanged
         assert metadata.title == "Dummy Title"
 
+    def test_conversion_bad_value_is_kept(self):
+        """A value that cannot be converted should not fail the item.
+
+        Music Source has been observed sending an empty ``duration`` for some
+        tracks; keep the raw value instead of raising.
+        """
+
+        def bad_conversion(_value):
+            raise ValueError("cannot convert")
+
+        class MyClass(data_structures.MetadataDictBase):
+            _types = {"duration": bad_conversion}
+
+        metadata = MyClass({"title": "Dummy Title", "duration": ""})
+        # The unconvertible value is kept as-is, so the result survives.
+        assert metadata.duration == ""
+        assert metadata.title == "Dummy Title"
+
     def test_get_attr(self):
         """Test the __getattr__ method"""
         metadata_dict = {

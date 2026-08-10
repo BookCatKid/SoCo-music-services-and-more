@@ -206,8 +206,20 @@ class MetadataDictBase:
         self.metadata = {}
         for key, value in metadata_dict.items():
             if key in self._types:
-                convertion_callable = self._types[key]
-                value = convertion_callable(value)
+                # Some services return values that do not match the declared
+                # type, e.g. Music Source sending an empty ``duration`` for a
+                # track. Keep the raw value instead of failing the whole
+                # search result.
+                try:
+                    value = self._types[key](value)
+                except (TypeError, ValueError):
+                    _LOG.debug(
+                        "Could not convert %s=%r to a %s for %s",
+                        key,
+                        value,
+                        self._types[key],
+                        self.__class__.__name__,
+                    )
             self.metadata[camel_to_underscore(key)] = value
 
     def __getattr__(self, key):
