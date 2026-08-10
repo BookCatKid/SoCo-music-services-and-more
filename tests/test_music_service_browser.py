@@ -577,6 +577,26 @@ def test_search_unknown_variant_raises(monkeypatch):
         music_browser.search("tracks", "hello", variant="nope")
 
 
+def test_anonymous_browse_with_bare_udn_uses_shared_client(monkeypatch):
+    # Anonymous services (eg myTuner Radio) have a bare ``SA_RINCON…_`` UDN
+    # with no account UID; scoping must not crash on it.
+    session = FakeSession(post_responses=[FakeResponse(content=SMAPI_METADATA)])
+    service = FakeService(auth_type="Anonymous")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    account = ConfiguredMusicServiceAccount(204, 0, "SA_RINCON68615_")
+    music_browser = MusicServiceBrowser(
+        "Example", account=account, device=FakeDevice(), session=session
+    )
+
+    result = music_browser.get_metadata()
+    assert result.transport == "smapi"
+    assert len(result.items) == 2
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    # No account-scoped householdId may be derived from a bare UDN.
+    assert not browser._children(envelope, "householdId")
+
+
 def test_anonymous_search_uses_shared_household_client(monkeypatch):
     session = FakeSession(post_responses=[FakeResponse(content=SEARCH_RESPONSE)])
     service = FakeService(auth_type="Anonymous")

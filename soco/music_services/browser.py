@@ -1441,13 +1441,23 @@ class MusicServiceBrowser:
         calls made under the plain household identity with
         ``InvalidTokenException`` even though their content home page accepts
         it.  Content-session objects are always handed back to SMAPI scoped;
-        search is likewise scoped whenever the account carries a UDN.  The
-        shared client is returned for anonymous services, which send no token.
+        search is likewise scoped whenever the account carries a token UDN.
+
+        The shared client is returned for anonymous services, which send no
+        token: their account UDN is only a bare ``SA_RINCON…_`` identifier and
+        carries no account UID to derive a device identity from.
         """
         if force_scoped or self.account.udn:
-            return self._make_client(
-                _account_content_device_id(self.device.household_id, self.account)
-            )
+            try:
+                return self._make_client(
+                    _account_content_device_id(
+                        self.device.household_id, self.account
+                    )
+                )
+            except MusicServiceAuthException:
+                # Not a token account (eg an anonymous service): no account
+                # UID is encoded in the UDN, so there is nothing to scope to.
+                pass
         return self._client
 
     def search(self, category, term="", index=0, count=100, variant="all"):
