@@ -1131,6 +1131,20 @@ PMAP_XML = b"""\
             <QualityBadgeMap id="16bit" text="Lossless"/>
         </StreamQualityBadgeDictionary>
     </PresentationMap>
+    <PresentationMap type="NowPlayingRatings">
+        <Match propname="vote" value="0">
+            <Ratings>
+                <Rating AutoSkip="NEVER" Id="1" StringId="VoteUp"
+                        OnSuccessStringId="VoteUpSuccess">
+                    <Icon Controller="acr" Uri="https://img/star-acr.png"/>
+                    <Icon Controller="universal" Uri="https://img/star.svg"/>
+                </Rating>
+            </Ratings>
+        </Match>
+    </PresentationMap>
+    <PresentationMap type="QuickSkips">
+        <QuickSkip type="episode.podcast" forwardSeconds="45" backwardSeconds="10"/>
+    </PresentationMap>
 </Presentation>
 """
 
@@ -1240,6 +1254,28 @@ def test_get_presentation_map_parses_all_blocks(monkeypatch):
         }
     ]
     assert pmap.stream_quality_badges == {"16bit": "Lossless"}
+    assert pmap.now_playing_ratings == [
+        {
+            "propname": "vote",
+            "value": "0",
+            "type": None,
+            "rating": {
+                "id": "1",
+                "string_id": "VoteUp",
+                "auto_skip": "NEVER",
+                "on_success_string_id": "VoteUpSuccess",
+                "type": None,
+                "state": None,
+                "icons": {
+                    "acr": "https://img/star-acr.png",
+                    "universal": "https://img/star.svg",
+                },
+            },
+        }
+    ]
+    assert pmap.quick_skips == {
+        "episode.podcast": {"forward_seconds": 45, "backward_seconds": 10}
+    }
     # Cached: the second call performs no additional fetch.
     assert music_browser.get_presentation_map() is pmap
     assert len(session.get_calls) == 2

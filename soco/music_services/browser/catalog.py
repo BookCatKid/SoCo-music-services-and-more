@@ -42,6 +42,8 @@ class PresentationMap:
         search_categories=None,
         menu_item_overrides=None,
         stream_quality_badges=None,
+        now_playing_ratings=None,
+        quick_skips=None,
         raw_xml="",
     ):
         self.uri = uri
@@ -56,6 +58,11 @@ class PresentationMap:
         }
         self.menu_item_overrides = list(menu_item_overrides or [])
         self.stream_quality_badges = dict(stream_quality_badges or {})
+        self.now_playing_ratings = list(now_playing_ratings or [])
+        self.quick_skips = {
+            skip_type: dict(entry)
+            for skip_type, entry in (quick_skips or {}).items()
+        }
         self.raw_xml = raw_xml
 
     def __repr__(self):
@@ -114,6 +121,8 @@ def parse_presentation_map(payload, uri="", version=None):
     search_categories = {}
     menu_item_overrides = []
     stream_quality_badges = {}
+    now_playing_ratings = []
+    quick_skips = {}
 
     for block in root:
         if _local_name(block.tag) != "PresentationMap":
@@ -131,6 +140,10 @@ def parse_presentation_map(payload, uri="", version=None):
             menu_item_overrides = _parse_menu_item_overrides(block)
         elif block_type == "StreamQualityBadgeDictionary":
             stream_quality_badges = _parse_quality_badges(block)
+        elif block_type in ("NowPlayingRatings", "NowPlayingRatings_v2"):
+            now_playing_ratings.extend(_parse_now_playing_ratings(block))
+        elif block_type == "QuickSkips":
+            quick_skips = _parse_quick_skips(block)
 
     return PresentationMap(
         uri=uri,
@@ -142,6 +155,8 @@ def parse_presentation_map(payload, uri="", version=None):
         search_categories=search_categories,
         menu_item_overrides=menu_item_overrides,
         stream_quality_badges=stream_quality_badges,
+        now_playing_ratings=now_playing_ratings,
+        quick_skips=quick_skips,
         raw_xml=payload.decode("utf-8", "replace"),
     )
 
@@ -251,6 +266,70 @@ def _parse_quality_badges(block):
             continue
         if badge.get("id"):
             result[badge.get("id")] = badge.get("text", "")
+    return result
+
+
+def _parse_now_playing_ratings(block):
+    """Parse a ``NowPlayingRatings`` block into per-rating entries.
+
+    Each ``<Match>`` groups one vote/rating state (``propname``/``value``) and
+    every ``<Rating>`` under it carries its ids, skip behavior and one icon
+    URL per controller.  ``NowPlayingRatings_v2`` additionally carries
+    ``type``/``state`` attributes on both the match and the rating.
+    """
+    result = []
+    for match in block.iter():
+        if _local_name(match.tag) != "Match":
+            continue
+        for rating in match.iter():
+            if _local_name(rating.tag) != "Rating":
+                continue
+            icons = {}
+            for icon in rating:
+                if _local_name(icon.tag) != "Icon":
+                    continue
+                if icon.get("Controller") and icon.get("Uri"):
+                    icons[icon.get("Controller")] = icon.get("Uri")
+            result.append(
+                {
+                    "propname": match.get("propname", ""),
+                    "value": match.get("value", ""),
+                    "type": match.get("type"),
+                    "rating": {
+                        "id": rating.get("Id", ""),
+                        "string_id": rating.get("StringId", ""),
+                        "auto_skip": rating.get("AutoSkip", ""),
+                        "on_success_string_id": rating.get(
+                            "OnSuccessStringId", ""
+                        ),
+                        "type": rating.get("Type"),
+                        "state": rating.get("State"),
+                        "icons": icons,
+                    },
+                }
+            )
+    return result
+
+
+def _parse_quick_skips(block):
+    """Parse a ``QuickSkips`` block into {type: {forward, backward seconds}}."""
+    result = {}
+    for skip in block.iter():
+        if _local_name(skip.tag) != "QuickSkip":
+            continue
+        skip_type = skip.get("type", "")
+        if not skip_type:
+            continue
+        entry = {}
+        for attr, key in (("forwardSeconds", "forward_seconds"),
+                          ("backwardSeconds", "backward_seconds")):
+            raw = skip.get(attr)
+            if raw:
+                try:
+                    entry[key] = int(raw)
+                except ValueError:
+                    pass
+        result[skip_type] = entry
     return result
 
 
