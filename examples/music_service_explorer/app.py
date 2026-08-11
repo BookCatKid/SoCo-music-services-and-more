@@ -1,11 +1,15 @@
-"""Music-service explorer: a read-only showcase of every soco music-service feature.
+"""Music-service explorer: a showcase of every soco music-service feature.
 
 This is a deliberately thin Flask app. Every route is a one-to-one demo of a
 soco music-service API call - the equivalent soco snippet is shown in the UI
 next to each feature so the app doubles as runnable documentation.
 
-No playback happens anywhere in this app: browsing, searching and metadata
-inspection are all read-only operations.
+No playback happens anywhere in this app. Browsing, searching and metadata
+inspection are all read-only, and most of the UI stays that way. The one
+mutating part is the ``Accounts`` tab, which uses
+:class:`soco.music_services.MusicServiceAccountManager` to add, re-link,
+rename, and remove household music-service accounts - every one of those
+actions asks for explicit confirmation first.
 
 Run it from the repository root with the checked-out soco on the path::
 
@@ -17,6 +21,7 @@ Run it from the repository root with the checked-out soco on the path::
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 import time
 
@@ -38,6 +43,7 @@ from soco.exceptions import MusicServiceAuthException  # noqa: E402
 from soco.music_services import (  # noqa: E402
     ConfiguredMusicServiceAccount,
     MusicService,
+    MusicServiceAccountManager,
     MusicServiceBrowser,
     MusicServiceBrowseItem,
 )
@@ -53,6 +59,11 @@ SERVICES_TTL = 300  # seconds
 # the event, so the app caches the fetched accounts and only re-subscribes
 # after the TTL - otherwise every search/browse call would hit the network.
 ACCOUNTS_TTL = 600  # seconds
+
+# Authorized link sessions are held server-side (the link code is a
+# short-lived secret that should not round-trip through the browser) and are
+# only ever committed by the same server that created them.
+LINK_SESSION_TTL = 900  # seconds
 
 
 def _device():
@@ -103,6 +114,19 @@ def _accounts_for(name):
     return [a for a in accounts if a.service_id == service_id]
 
 
+def _invalidate_caches():
+    """Drop caches whose content a household mutation just made stale.
+
+    Every account mutation (add, re-link, rename, remove, credential
+    refresh) invalidates the cached account payload, the per-service
+    browsers (which hold a copy of the account record), and the account
+    managers. The next request re-fetches everything from the players.
+    """
+    app._accounts_cache = None
+    app._browsers = {}
+    app._managers = {}
+
+
 def _cached_accounts():
     """All configured household accounts, fetched at most once per TTL.
 
@@ -127,6 +151,25 @@ def _cached_accounts():
         accounts = []
     app._accounts_cache = (accounts, now)
     return accounts
+
+
+def _get_manager(name):
+    """A MusicServiceAccountManager for a named service, cached briefly.
+
+    Constructing the manager performs a couple of local SOAP reads, so it is
+    cached per service like the browsers. Managers are dropped by
+    :func:`_invalidate_caches` after a mutation so their household state is
+    never reused across a change.
+    """
+    cache = getattr(app, "_managers", {})
+    if name in cache:
+        return cache[name]
+    manager = MusicServiceAccountManager(name, device=_device())
+    cache[name] = manager
+    if len(cache) > 12:
+        cache.pop(next(iter(cache)))
+    app._managers = cache
+    return manager
 
 
 def _get_browser(name, account=None):
@@ -458,19 +501,7 @@ def api_accounts():
         return jsonify({"error": "missing service"}), 400
     try:
         accounts = _accounts_for(name)
-        return jsonify(
-            {
-                "accounts": [
-                    {
-                        "nickname": account.nickname or "unnamed",
-                        "serial_number": account.serial_number,
-                        "tier": account.tier,
-                        "username": account.username,
-                    }
-                    for account in accounts
-                ]
-            }
-        )
+        return jsonify({"accounts": [_account_row(account) for account in accounts]})
     except Exception as error:  # pylint: disable=broad-except
         return jsonify({"error": str(error)}), 500
 
@@ -593,6 +624,269 @@ def api_info():
     """Everything soco exposes about a service descriptor."""
     try:
         return jsonify(_misc_service_info(request.args.get("service", "")))
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Feature: account onboarding (MusicServiceAccountManager)
+# ---------------------------------------------------------------------------
+#
+# This is the one mutating part of the app. begin-link only asks the provider
+# for its authorization choices (read-only); commit-link, add-credentials and
+# the manage actions write to the household players. The frontend confirms
+# every one of those before sending it.
+
+# Authorized link sessions held server-side, keyed by an opaque token.
+_LINK_SESSIONS = {}
+
+
+def _store_link(link):
+    """Hold an authorized link session and return its opaque token."""
+    _purge_links()
+    token = secrets.token_urlsafe(16)
+    _LINK_SESSIONS[token] = (time.time(), link)
+    return token
+
+
+def _take_link(token):
+    """Pop and return a stored link session, rejecting unknown/expired ones."""
+    _purge_links()
+    entry = _LINK_SESSIONS.pop(token, None)
+    if entry is None:
+        raise ValueError("Unknown link session; begin a new authorization")
+    stamp, link = entry
+    if time.time() - stamp > LINK_SESSION_TTL:
+        raise ValueError(
+            "Link session expired; begin a new authorization before committing"
+        )
+    return link
+
+
+def _purge_links():
+    now = time.time()
+    expired = [
+        token
+        for token, (stamp, _link) in _LINK_SESSIONS.items()
+        if now - stamp > LINK_SESSION_TTL
+    ]
+    for token in expired:
+        del _LINK_SESSIONS[token]
+
+
+def _account_row(account):
+    """The JSON shape of one configured account for the onboarding UI."""
+    try:
+        account_uid = account.account_uid
+    except Exception:  # pylint: disable=broad-except
+        account_uid = None
+    return {
+        "nickname": account.nickname or "unnamed",
+        "serial_number": account.serial_number,
+        "tier": account.tier,
+        "username": account.username,
+        "udn": account.udn,
+        "keyless": account.keyless,
+        "account_uid": account_uid,
+    }
+
+
+def _onboard_status(name):
+    """Auth path + configured accounts for one service."""
+    service = _get_service(name)
+    auth = service.auth_type
+    if auth in ("DeviceLink", "AppLink"):
+        add_path = "link"
+    elif auth in ("Anonymous", "UserId", "UserIdPassword"):
+        add_path = "credentials"
+    else:
+        add_path = "none"
+    service_id = int(service.service_id)
+    accounts = [
+        _account_row(account)
+        for account in _cached_accounts()
+        if account.service_id == service_id
+    ]
+    return {
+        "service": name,
+        "auth_type": auth,
+        "add_path": add_path,
+        "accounts": accounts,
+    }
+
+
+@app.before_request
+def _guard_cross_site_mutations():
+    """Block cross-site requests to the mutating endpoints.
+
+    The onboarding mutations are plain JSON POSTs with no session or auth, so
+    a cross-origin ``fetch`` with a ``text/plain`` body could otherwise
+    trigger them without a CORS preflight (the browser allows such requests,
+    it only hides the response). Requiring a custom header -- which a
+    cross-origin request cannot add without triggering a preflight -- and
+    rejecting foreign ``Origin`` headers closes that hole while keeping the
+    endpoints usable by the app itself and by local tooling.
+    """
+    if request.method != "POST":
+        return None
+    origin = request.headers.get("Origin", "")
+    local_origin = origin in ("http://127.0.0.1:5050", "http://localhost:5050")
+    # A foreign Origin is blocked outright, custom header or not: browsers
+    # cannot add the header cross-origin without a CORS preflight, so the
+    # header check below is the primary defense and the Origin check is
+    # belt-and-suspenders.
+    if origin and not local_origin:
+        return jsonify({"error": "cross-site request blocked"}), 403
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest" or local_origin:
+        return None
+    # No Origin and no custom header: not a browser session, so reject.
+    return jsonify({"error": "cross-site request blocked"}), 403
+
+
+@app.route("/api/onboard/status")
+def api_onboard_status():
+    """The authorization path and configured accounts for one service."""
+    name = request.args.get("service", "")
+    if not name:
+        return jsonify({"error": "missing service"}), 400
+    try:
+        return jsonify(_onboard_status(name))
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/onboard/begin-link", methods=["POST"])
+def api_onboard_begin_link():
+    """Ask the provider for its authorization choices (no player mutation).
+
+    The authorized session is stored server-side; the browser only ever sees
+    the registration URL (and the link code when the provider asks the user
+    to enter one on the page).
+    """
+    data = request.get_json(force=True) or {}
+    name = data.get("service", "")
+    if not name:
+        return jsonify({"error": "missing service"}), 400
+    try:
+        link = _get_manager(name).begin_link()
+        token = _store_link(link)
+        return jsonify(
+            {
+                "session_token": token,
+                "source_action": link.source_action,
+                "registration_url": link.registration_url,
+                "app_url": link.app_url,
+                "link_code": link.link_code if link.show_link_code else "",
+                "show_link_code": link.show_link_code,
+                "standalone": link.standalone_supported,
+            }
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/onboard/commit-link", methods=["POST"])
+def api_onboard_commit_link():
+    """Commit an authorized link to the household players (mutation)."""
+    data = request.get_json(force=True) or {}
+    name = data.get("service", "")
+    token = data.get("session_token", "")
+    replace_udn = data.get("replace_account_udn", "") or ""
+    if not name or not token:
+        return jsonify({"error": "missing service or session_token"}), 400
+    try:
+        manager = _get_manager(name)
+        link = _take_link(token)
+        try:
+            added = manager.commit_link(link, replace_account_udn=replace_udn)
+        except Exception:
+            # A failed commit (provider exchange error, player rejection, ...)
+            # must not burn the user's authorization: put the session back so
+            # they can retry after fixing whatever went wrong.
+            _LINK_SESSIONS[token] = (time.time(), link)
+            raise
+        _invalidate_caches()
+        return jsonify(
+            {
+                "service_id": added.service_id,
+                "account_udn": added.account_udn,
+                "nickname": added.nickname,
+                "provider_nickname": added.provider_nickname,
+            }
+        )
+    except ValueError as error:
+        # Unknown/expired session tokens are client mistakes, not server bugs.
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/onboard/add-credentials", methods=["POST"])
+def api_onboard_add_credentials():
+    """Add an anonymous or legacy username/password account (mutation)."""
+    data = request.get_json(force=True) or {}
+    name = data.get("service", "")
+    if not name:
+        return jsonify({"error": "missing service"}), 400
+    try:
+        added = _get_manager(name).add_credentials(
+            data.get("username", ""), data.get("password", "")
+        )
+        _invalidate_caches()
+        return jsonify(
+            {
+                "service_id": added.service_id,
+                "account_udn": added.account_udn,
+                "nickname": added.nickname,
+            }
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        return jsonify({"error": str(error)}), 500
+
+
+@app.route("/api/onboard/manage", methods=["POST"])
+def api_onboard_manage():
+    """Rename, remove, re-credential, or edit one household account (mutation).
+
+    ``action`` is one of ``rename``, ``remove``, ``password``, ``md``, or
+    ``refresh``. The account is identified by its ``account_udn`` (the
+    canonical ``SA_RINCON...`` UDN from the status payload).
+    """
+    data = request.get_json(force=True) or {}
+    name = data.get("service", "")
+    action = data.get("action", "")
+    udn = data.get("account_udn", "")
+    if not name or not action:
+        return jsonify({"error": "missing service or action"}), 400
+    # Every manage action targets one account; a missing UDN is a client
+    # mistake, so reject it here rather than letting it surface as a 500.
+    if action != "refresh" and not udn:
+        return jsonify({"error": "an account UDN is required"}), 400
+    if action == "refresh" and not data.get("account_uid"):
+        return jsonify({"error": "an account UID is required for refresh"}), 400
+    try:
+        manager = _get_manager(name)
+        if action == "rename":
+            manager.set_nickname(udn, data.get("nickname", ""))
+        elif action == "remove":
+            manager.remove_account(udn)
+        elif action == "password":
+            manager.edit_account_password(udn, data.get("new_password", ""))
+        elif action == "md":
+            manager.edit_account_md(udn, data.get("new_md", ""))
+        elif action == "refresh":
+            manager.refresh_account_credentials(
+                int(data.get("account_uid", 0) or 0),
+                data.get("token", ""),
+                data.get("key", ""),
+            )
+        else:
+            return jsonify({"error": "unknown action {!r}".format(action)}), 400
+        _invalidate_caches()
+        return jsonify({"ok": True, "action": action})
+    except ValueError as error:
+        # Malformed client input (eg a non-numeric account_uid).
+        return jsonify({"error": str(error)}), 400
     except Exception as error:  # pylint: disable=broad-except
         return jsonify({"error": str(error)}), 500
 

@@ -209,6 +209,7 @@
         <div class="tab" data-tab="metadata" onclick="switchTab('metadata')">🏷️ Item metadata</div>
         <div class="tab" data-tab="extended" onclick="switchTab('extended')">🧬 Extended metadata</div>
         <div class="tab" data-tab="uris" onclick="switchTab('uris')">🔗 Stream URIs</div>
+        <div class="tab" data-tab="accounts" onclick="switchTab('accounts')">🔐 Accounts</div>
       </div>
       <div id="tab-info"></div>
       <div id="tab-search" class="hidden"></div>
@@ -216,6 +217,7 @@
       <div id="tab-metadata" class="hidden"></div>
       <div id="tab-extended" class="hidden"></div>
       <div id="tab-uris" class="hidden"></div>
+      <div id="tab-accounts" class="hidden"></div>
     </div>
     {% endif %}
   </main>
@@ -240,12 +242,23 @@ document.getElementById("configured-only").addEventListener("change", (ev) => {
   document.getElementById("service-count").textContent = visible;
 });
 
-async function api(path) {
-  const res = await fetch(path);
+async function api(path, options) {
+  const res = await fetch(path, options);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
   if (data && data.error) throw new Error(data.error);
   return data;
+}
+
+function apiPost(path, body) {
+  return api(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 function badge(label, cls) { return `<span class="badge ${cls || ""}">${esc(label)}</span>`; }
@@ -255,6 +268,7 @@ function selectService(el) {
   el.classList.add("active");
   state.service = el.dataset.name;
   state.browseStack = []; state.browsePage = 0;
+  try { localStorage.setItem("soco-explorer-service", state.service); } catch (e) {}
   document.getElementById("welcome").classList.add("hidden");
   document.getElementById("detail").classList.remove("hidden");
   switchTab("info");
@@ -263,7 +277,7 @@ function selectService(el) {
 function switchTab(name) {
   state.tab = name;
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-  ["info", "search", "browse", "metadata", "extended", "uris"].forEach(t =>
+  ["info", "search", "browse", "metadata", "extended", "uris", "accounts"].forEach(t =>
     document.getElementById("tab-" + t).classList.toggle("hidden", t !== name));
   if (name === "info") loadInfo();
   if (name === "search") loadSearch();
@@ -271,7 +285,20 @@ function switchTab(name) {
   if (name === "metadata") loadMetadataForm();
   if (name === "extended") loadExtendedForm();
   if (name === "uris") loadUrisForm();
+  if (name === "accounts") loadOnboard();
 }
+
+// Restore the last selected service across page reloads (the app reloads
+// after account mutations so the sidebar's "added" badges refresh).
+(function restoreSelection() {
+  let saved = null;
+  try { saved = localStorage.getItem("soco-explorer-service"); } catch (e) {}
+  if (!saved) return;
+  const item = Array.from(document.querySelectorAll(".service-item")).find(
+    (n) => n.dataset.name === saved
+  );
+  if (item) selectService(item);
+})();
 
 function snippet(title, code) {
   return `<details class="snippet"><summary>▸ soco code — ${esc(title)}</summary><pre>${esc(code)}</pre></details>`;
@@ -657,6 +684,260 @@ async function loadLastUpdate() {
     const data = await api(`/api/last-update?service=${encodeURIComponent(state.service)}`);
     box.innerHTML = `<pre>${esc(JSON.stringify(data.last_update, null, 2))}</pre>`;
   } catch (e) { box.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Accounts (MusicServiceAccountManager) ---------------- */
+// The one mutating tab: linking, adding, re-linking, renaming and removing
+// household accounts. Every mutation asks for explicit confirmation first.
+const onboard = { linkToken: "", relinkUdn: "", registrationUrl: "", appUrl: "" };
+
+async function loadOnboard() {
+  const el = document.getElementById("tab-accounts");
+  el.innerHTML = '<div class="msg"><span class="spinner"></span> Loading accounts…</div>';
+  try {
+    const status = await api(`/api/onboard/status?service=${encodeURIComponent(state.service)}`);
+    const linkable = status.add_path === "link";
+    let addHtml = "";
+    if (linkable) {
+      addHtml = `<div class="row">
+        <button onclick="startLink(null)">🔗 Begin authorization link</button>
+        <span class="hint">Asks the provider for its browser authorization page. No player state changes until you commit.</span>
+      </div>`;
+    } else if (status.add_path === "credentials") {
+      if (status.auth_type === "Anonymous") {
+        addHtml = `<div class="row">
+          <button onclick="addAnonymous()">➕ Add anonymous account</button>
+          <span class="hint">Stores a keyless record — any player can use the service without sign-in.</span>
+        </div>`;
+      } else {
+        addHtml = `<div class="row">
+          <input id="on-user" placeholder="username" style="min-width:180px">
+          <input id="on-pass" type="password" placeholder="password" style="min-width:180px">
+          <button onclick="addCredentials()">➕ Add account</button>
+        </div>
+        <p class="hint">Legacy ${esc(status.auth_type)} auth — stored in the player's account record via AddAccountX.</p>`;
+      }
+    } else {
+      addHtml = `<p class="hint">No supported add path for auth type <code>${esc(status.auth_type)}</code>.</p>`;
+    }
+    el.innerHTML = `
+      <div class="panel">
+        <h3>Add an account <code>MusicServiceAccountManager</code></h3>
+        <div class="row" style="margin-bottom:10px"><span class="badge auth">${esc(status.auth_type)}</span></div>
+        <div id="on-add">${addHtml}</div>
+        <div id="on-link" class="hidden"></div>
+      </div>
+      <div class="panel">
+        <h3>Configured accounts <span class="muted">(${status.accounts.length})</span></h3>
+        <div id="on-accounts">${renderAccounts(status.accounts, linkable, status.auth_type)}</div>
+        <div id="on-manage-form" class="hidden"></div>
+        <div id="on-msg"></div>
+      </div>`;
+  } catch (e) { el.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+function renderAccounts(accounts, linkable, authType) {
+  if (!accounts.length) {
+    return '<p class="hint">No account for this service is configured in the household yet.</p>';
+  }
+  return `<div class="accounts">` + accounts.map((a) => {
+    const uid = a.account_uid != null ? `uid ${a.account_uid}` : "";
+    const buttons = [
+      `<button class="secondary" data-udn="${esc(a.udn)}" data-nick="${esc(a.nickname)}" onclick="renameAccount(this)">Rename</button>`
+    ];
+    if (linkable) {
+      buttons.push(`<button class="secondary" data-udn="${esc(a.udn)}" onclick="startLink(this)">Re-link</button>`);
+    }
+    if (!a.keyless && a.account_uid != null) {
+      buttons.push(`<button class="secondary" data-udn="${esc(a.udn)}" data-uid="${a.account_uid}" onclick="refreshForm(this)">Refresh</button>`);
+    }
+    if (authType === "UserIdPassword") {
+      buttons.push(`<button class="secondary" data-udn="${esc(a.udn)}" onclick="passwordForm(this)">Password</button>`);
+    }
+    buttons.push(`<button class="secondary" data-udn="${esc(a.udn)}" onclick="mdForm(this)">Metadata</button>`);
+    buttons.push(`<button style="background:rgba(255,107,107,.15); border-color:rgba(255,107,107,.4); color:var(--err);" data-udn="${esc(a.udn)}" data-nick="${esc(a.nickname)}" onclick="removeAccount(this)">Remove</button>`);
+    return `<div class="acct">
+      <div style="min-width:0">
+        <span class="nick">${esc(a.nickname)}</span>${a.keyless ? badge("keyless") : ""}
+        <div class="sub">${esc(a.udn)}${a.tier ? " · " + esc(a.tier) : ""}${uid ? " · " + uid : ""}</div>
+      </div>
+      <div class="row" style="justify-content:flex-end">${buttons.join("")}</div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+/* --- add --- */
+async function addCredentials() {
+  const username = document.getElementById("on-user").value.trim();
+  const password = document.getElementById("on-pass").value;
+  if (!confirm(`Add this ${state.service} account to the household?`)) return;
+  await runAdd({ username, password });
+}
+
+async function addAnonymous() {
+  if (!confirm(`Add the anonymous ${state.service} service to the household?`)) return;
+  await runAdd({ username: "", password: "" });
+}
+
+async function runAdd(creds) {
+  flashMsg('<div class="msg"><span class="spinner"></span> Adding…</div>');
+  try {
+    await apiPost("/api/onboard/add-credentials", { service: state.service, ...creds });
+    flashMsg('<div class="msg ok">Account added — reloading…</div>');
+    reloadApp();
+  } catch (e) { flashMsg(`<div class="msg err">${esc(e.message)}</div>`); }
+}
+
+/* --- link flow --- */
+async function startLink(btn) {
+  onboard.relinkUdn = btn && btn.dataset.udn ? btn.dataset.udn : "";
+  onboard.linkToken = "";
+  onboard.registrationUrl = "";
+  onboard.appUrl = "";
+  const box = document.getElementById("on-link");
+  box.classList.remove("hidden");
+  box.innerHTML = '<div class="msg"><span class="spinner"></span> Asking the provider…</div>';
+  try {
+    const data = await apiPost("/api/onboard/begin-link", { service: state.service });
+    onboard.linkToken = data.session_token;
+    onboard.registrationUrl = data.registration_url;
+    onboard.appUrl = data.app_url;
+    const relinkNote = onboard.relinkUdn
+      ? '<p class="hint">Re-linking an existing account — its record keeps its identity and only the credentials are swapped (ReplaceAccountX).</p>'
+      : "";
+    box.innerHTML = `
+      <div class="msg ${data.standalone ? "ok" : "warn"}">
+        ${data.standalone
+          ? "<b>Authorize in your browser:</b> open the registration page, sign in, then come back here and commit."
+          : data.source_action === "anonymous"
+            ? "Anonymous service — no authorization needed."
+            : `No standalone browser path was offered (${esc(data.source_action || "app link")}).`}
+      </div>
+      ${data.link_code ? `<div class="msg warn">Enter this code on the provider page: <b style="font-family:var(--mono); letter-spacing:2px;">${esc(data.link_code)}</b></div>` : ""}
+      <div class="row">
+        ${data.registration_url ? `<button onclick="openLink()">↗ Open registration page</button>` : ""}
+        ${data.app_url ? `<button class="secondary" onclick="openApp()">Open app</button>` : ""}
+        ${data.standalone ? `<button onclick="commitLink()">✅ I've signed in — commit</button>` : ""}
+        <button class="secondary" onclick="cancelLink()">Cancel</button>
+      </div>
+      ${relinkNote}
+      <p class="hint">Committing installs the account on the household players — the one action in this app that changes your Sonos system.</p>`;
+  } catch (e) {
+    box.innerHTML = `<div class="msg err">${esc(e.message)}</div>
+      <p class="hint">Some providers (eg Apple Music) only offer app-to-app linking from the Sonos mobile app — that's the provider's choice, not a soco bug.</p>`;
+  }
+}
+
+function openLink() { if (onboard.registrationUrl) window.open(onboard.registrationUrl, "_blank", "noopener"); }
+function openApp() { if (onboard.appUrl) window.open(onboard.appUrl, "_blank", "noopener"); }
+
+function cancelLink() {
+  onboard.linkToken = "";
+  onboard.relinkUdn = "";
+  onboard.registrationUrl = "";
+  onboard.appUrl = "";
+  const box = document.getElementById("on-link");
+  box.innerHTML = "";
+  box.classList.add("hidden");
+}
+
+async function commitLink() {
+  if (!onboard.linkToken) return;
+  if (!confirm("Commit this authorization to the household players? This adds (or re-links) the account for real.")) return;
+  try {
+    await apiPost("/api/onboard/commit-link", {
+      service: state.service,
+      session_token: onboard.linkToken,
+      replace_account_udn: onboard.relinkUdn,
+    });
+    onboard.linkToken = "";
+    flashMsg('<div class="msg ok">Account committed — reloading…</div>');
+    reloadApp();
+  } catch (e) { flashMsg(`<div class="msg err">${esc(e.message)}</div>`); }
+}
+
+/* --- manage --- */
+function renameAccount(btn) {
+  const next = prompt("New nickname", btn.dataset.nick || "");
+  if (next == null) return;
+  runManage({ action: "rename", account_udn: btn.dataset.udn, nickname: next.trim() });
+}
+
+function removeAccount(btn) {
+  const nick = btn.dataset.nick || "unnamed";
+  if (!confirm(`Remove the “${nick}” account from this household?`)) return;
+  runManage({ action: "remove", account_udn: btn.dataset.udn });
+}
+
+function passwordForm(btn) {
+  const next = prompt("New password", "");
+  if (next == null) return;
+  runManage({ action: "password", account_udn: btn.dataset.udn, new_password: next });
+}
+
+function mdForm(btn) {
+  const next = prompt("New provider metadata blob", "");
+  if (next == null) return;
+  runManage({ action: "md", account_udn: btn.dataset.udn, new_md: next });
+}
+
+function refreshForm(btn) {
+  showManageForm(`
+    <div class="row">
+      <input id="rf-token" placeholder="new token" style="flex:1; min-width:160px">
+      <input id="rf-key" placeholder="new key" style="flex:1; min-width:160px">
+      <button onclick="doRefresh()">Save credentials</button>
+      <button class="secondary" onclick="hideManageForm()">Cancel</button>
+    </div>
+    <p class="hint">Push a freshly obtained token/key pair into the player's stored record (RefreshAccountCredentialsX).</p>`);
+  const token = document.getElementById("rf-token");
+  token.dataset.udn = btn.dataset.udn;
+  token.dataset.uid = btn.dataset.uid;
+}
+
+function doRefresh() {
+  const token = document.getElementById("rf-token");
+  if (!confirm("Replace the stored credentials for this account?")) return;
+  runManage({
+    action: "refresh",
+    account_udn: token.dataset.udn,
+    account_uid: parseInt(token.dataset.uid, 10),
+    token: token.value.trim(),
+    key: document.getElementById("rf-key").value.trim(),
+  });
+}
+
+async function runManage(payload) {
+  flashMsg('<div class="msg"><span class="spinner"></span> Updating…</div>');
+  try {
+    await apiPost("/api/onboard/manage", { service: state.service, ...payload });
+    flashMsg('<div class="msg ok">Account updated — reloading…</div>');
+    reloadApp();
+  } catch (e) { flashMsg(`<div class="msg err">${esc(e.message)}</div>`); }
+}
+
+/* --- helpers --- */
+function showManageForm(html) {
+  const box = document.getElementById("on-manage-form");
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function hideManageForm() {
+  const box = document.getElementById("on-manage-form");
+  box.innerHTML = "";
+  box.classList.add("hidden");
+}
+
+function flashMsg(html) {
+  const box = document.getElementById("on-msg");
+  if (box) box.innerHTML = html;
+}
+
+function reloadApp() {
+  try { localStorage.setItem("soco-explorer-service", state.service || ""); } catch (e) {}
+  location.reload();
 }
 </script>
 </body>
