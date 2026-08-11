@@ -501,19 +501,6 @@ class _ConfiguredSmapiClient:
             return result
         return {"value": value}
 
-    def get_media_uri(self, object_id):
-        """Return the provider streaming URI for one item."""
-        try:
-            root = self._request_with_refresh("getMediaURI", {"id": object_id})
-        except _BrowseSoapFault as fault:
-            if self._is_expired_fault(fault):
-                raise MusicServiceAuthException(str(fault)) from fault
-            raise fault.as_music_service_exception() from fault
-        results = _children(root, "getMediaURIResult")
-        if not results:
-            raise MusicServiceException("getMediaURI response did not contain a result")
-        return (results[0].text or "").strip() or None
-
     def get_extended_metadata(self, object_id):
         """Return related items and text for one item."""
         try:
@@ -573,24 +560,6 @@ class _ConfiguredSmapiClient:
             "text": text_entries,
             "raw": _as_mapping(_element_value(result)),
         }
-
-    def get_extended_metadata_text(self, object_id, metadata_type):
-        """Return one extended-metadata text field (eg ``ARTIST_BIO``)."""
-        try:
-            root = self._request_with_refresh(
-                "getExtendedMetadataText",
-                {"id": object_id, "type": metadata_type},
-            )
-        except _BrowseSoapFault as fault:
-            if self._is_expired_fault(fault):
-                raise MusicServiceAuthException(str(fault)) from fault
-            raise fault.as_music_service_exception() from fault
-        results = _children(root, "getExtendedMetadataTextResult")
-        if not results:
-            raise MusicServiceException(
-                "getExtendedMetadataText response did not contain a result"
-            )
-        return (results[0].text or "").strip() or None
 
     def get_last_update(self):
         """Return catalog/favorites change timestamps from the provider."""

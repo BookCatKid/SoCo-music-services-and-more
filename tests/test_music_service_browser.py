@@ -646,72 +646,6 @@ def test_get_media_metadata_is_read_only(monkeypatch):
     assert household and household[0].text == "Sonos_household_00abcdef"
 
 
-def test_get_media_uri_returns_streaming_uri(monkeypatch):
-    media_uri = b"""\
-    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-      <s:Body>
-        <getMediaURIResponse xmlns="http://www.sonos.com/Services/1.1">
-          <getMediaURIResult>x-sonosapi-stream:track:1</getMediaURIResult>
-        </getMediaURIResponse>
-      </s:Body>
-    </s:Envelope>
-    """
-    session = FakeSession(post_responses=[FakeResponse(content=media_uri)])
-    # Bearer capability (bit 3) advertises controller-side dereference.
-    service = FakeService(capabilities="8")
-    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
-    music_browser = MusicServiceBrowser(
-        "Example", account=make_account(), device=FakeDevice(), session=session
-    )
-
-    uri = music_browser.get_media_uri("track:1")
-
-    assert uri == "x-sonosapi-stream:track:1"
-    _url, request = session.post_calls[0]
-    envelope = XML.fromstring(request["data"])
-    assert browser._children(envelope, "getMediaURI")
-    assert browser._children(envelope, "id")[0].text == "track:1"
-
-
-def test_get_media_uri_accepts_browse_item(monkeypatch):
-    media_uri = b"""\
-    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-      <s:Body>
-        <getMediaURIResponse xmlns="http://www.sonos.com/Services/1.1">
-          <getMediaURIResult>https://cdn.example.invalid/track.mp3</getMediaURIResult>
-        </getMediaURIResponse>
-      </s:Body>
-    </s:Envelope>
-    """
-    session = FakeSession(post_responses=[FakeResponse(content=media_uri)])
-    # Bearer capability (bit 3) advertises controller-side dereference.
-    service = FakeService(capabilities="8")
-    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
-    music_browser = MusicServiceBrowser(
-        "Example", account=make_account(), device=FakeDevice(), session=session
-    )
-
-    item = MusicServiceBrowseItem("track:1", "Title", "mediaMetadata")
-    uri = music_browser.get_media_uri(item)
-
-    assert uri == "https://cdn.example.invalid/track.mp3"
-
-
-def test_get_media_uri_raises_for_player_resolved_services(monkeypatch):
-    """Services without Bearer/device-cert capabilities resolve on the player."""
-    service = FakeService(capabilities="0")
-    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
-    music_browser = MusicServiceBrowser(
-        "Example", account=make_account(), device=FakeDevice(), session=FakeSession()
-    )
-
-    item = MusicServiceBrowseItem("track:1", "Title", "mediaMetadata")
-    with pytest.raises(
-        MusicServiceException, match="resolves playback on the player"
-    ):
-        music_browser.get_media_uri(item)
-
-
 def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
     service = FakeService(service_id="204")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
@@ -772,34 +706,6 @@ def test_get_extended_metadata_parses_related_items_and_text(monkeypatch):
     envelope = XML.fromstring(request["data"])
     assert browser._children(envelope, "getExtendedMetadata")
     assert browser._children(envelope, "id")[0].text == "track:1"
-
-
-def test_get_extended_metadata_text_returns_field(monkeypatch):
-    text_response = b"""\
-    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-      <s:Body>
-        <getExtendedMetadataTextResponse xmlns="http://www.sonos.com/Services/1.1">
-          <getExtendedMetadataTextResult>
-            The full biography...
-          </getExtendedMetadataTextResult>
-        </getExtendedMetadataTextResponse>
-      </s:Body>
-    </s:Envelope>
-    """
-    session = FakeSession(post_responses=[FakeResponse(content=text_response)])
-    service = FakeService()
-    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
-    music_browser = MusicServiceBrowser(
-        "Example", account=make_account(), device=FakeDevice(), session=session
-    )
-
-    text = music_browser.get_extended_metadata_text("track:1", "ARTIST_BIO")
-
-    assert text == "The full biography..."
-    _url, request = session.post_calls[0]
-    envelope = XML.fromstring(request["data"])
-    assert browser._children(envelope, "getExtendedMetadataText")
-    assert browser._children(envelope, "type")[0].text == "ARTIST_BIO"
 
 
 def test_get_last_update_returns_change_timestamps(monkeypatch):

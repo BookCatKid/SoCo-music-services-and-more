@@ -45,3 +45,8 @@ Every feature panel has a "soco code" snippet showing the equivalent Python.
 - The logo catalog (`get_all_music_services(include_logos=True)`) lives on the
   `music-service-icons` branch; the sidebar shows initials until that API is
   merged here.
+- **Multiple accounts per service:** a household can configure several
+  accounts for one service (eg two Amazon Music logins). `get_accounts()`
+  lists them with their nicknames. An account can be provisioned yet still
+  reject playback (the provider returns `LoginDisabled`), so a client
+  should try each account until one plays and reuse that one.

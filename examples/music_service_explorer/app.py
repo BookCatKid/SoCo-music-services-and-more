@@ -389,7 +389,6 @@ def _browser_extended_metadata(name, item_id, account=None):
 def _browser_media_uri(name, item_id, account=None):
     browser = _get_browser(name, account=account)
     return {
-        "media_uri": browser.get_media_uri(item_id),
         "sonos_uri": browser.sonos_uri_from_id(item_id),
     }
 
@@ -601,7 +600,7 @@ def api_extended_metadata():
 
 @app.route("/api/media-uri")
 def api_media_uri():
-    """get_media_uri + sonos_uri_from_id for one item (browser API)."""
+    """Player-resolved stream URI for one item (browser API)."""
     name = request.args.get("service", "")
     item_id = request.args.get("item", "")
     account = _account_from_request(name)

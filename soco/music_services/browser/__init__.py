@@ -5,6 +5,20 @@ remains unchanged; this package implements the desktop controller's newer
 account-aware browse flow alongside it. Only read operations are
 implemented here. In particular, this package does not add, remove,
 rename, authorize, or otherwise mutate music-service accounts.
+
+Playback is always resolved by the player, never by this package:
+:meth:`~MusicServiceBrowser.sonos_uri_from_id` builds a ``x-sonosapi-stream:``
+URI which the speaker dereferences with its own credentials. The provider's
+controller-side ``getMediaURI`` action is dead in practice (services reject
+or ignore it), so it is deliberately not exposed.
+
+A household can configure **several accounts for one service** (eg two
+Amazon Music logins). ``get_accounts()`` lists them with nicknames; when
+building a browser for playback, a client should try each account until
+one plays - an account may be provisioned but its provider can still
+reject playback (``LoginDisabled``). Pick a working account once and reuse
+it, and prefer an account explicitly over letting the browser guess when
+more than one exists.
 """
 
 from __future__ import unicode_literals
@@ -543,25 +557,6 @@ class MusicServiceBrowser:
         # scoped device identity like every other SMAPI call here.
         return self._scoped_client().get_media_metadata(object_id)
 
-    def get_media_uri(self, item):
-        """Return the provider streaming URI for one item.
-
-        Controller-side dereference is only possible for services which
-        advertise the Bearer (bit 3) or device-cert (bit 17) capabilities
-        that the desktop controller keys its getMediaURI headers from. For
-        other services (Amazon Music among them) the player resolves the
-        stream itself; use :meth:`sonos_uri_from_id` instead of calling the
-        provider's getMediaURI, which rejects controller-side dereference.
-        """
-        capabilities = int(self.music_service.capabilities)
-        if not (capabilities & 8) and not (capabilities & (1 << 17)):
-            raise MusicServiceException(
-                f"{self.music_service.service_name} resolves playback on "
-                "the player; use sonos_uri_from_id() to build a playable URI"
-            )
-        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
-        return self._scoped_client().get_media_uri(object_id)
-
     def sonos_uri_from_id(self, item_id):
         """Return a URI which can be sent to a player for playing.
 
@@ -586,13 +581,6 @@ class MusicServiceBrowser:
             "text": data["text"],
             "raw": data["raw"],
         }
-
-    def get_extended_metadata_text(self, item, metadata_type):
-        """Return one extended-metadata text field for an item."""
-        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
-        return self._scoped_client().get_extended_metadata_text(
-            object_id, metadata_type
-        )
 
     def get_last_update(self):
         """Return provider catalog/favorites change timestamps."""
