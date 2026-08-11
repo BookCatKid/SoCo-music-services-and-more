@@ -12,6 +12,15 @@ URI which the speaker dereferences with its own credentials. The provider's
 controller-side ``getMediaURI`` action is dead in practice (services reject
 or ignore it), so it is deliberately not exposed.
 
+Playing favorites and containers: favorites store a res URI. Pure radio
+URIs (``x-sonosapi-stream:``, ``x-rincon-mp3radio:``, …) and track URIs
+(``x-sonos-http:``) can be handed straight to a player; container URIs
+(``x-rincon-cpcontainer:``) cannot be played raw - decode the embedded
+item id (percent-decode, strip the 8-hex service prefix and any
+``#fragment``), then browse to a track with :meth:`~MusicServiceBrowser.get_metadata`
+and play that. Track URIs carry signed URLs that expire; re-resolving the
+embedded id through the player is the reliable fallback.
+
 A household can configure **several accounts for one service** (eg two
 Amazon Music logins). ``get_accounts()`` lists them with nicknames; when
 building a browser for playback, a client should try each account until
