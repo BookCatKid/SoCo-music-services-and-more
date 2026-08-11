@@ -18,9 +18,109 @@ Visit the `SoCo documentation`_ for a more detailed overview of the functionalit
 WARNING
 -------
 
+.. note::
+
+   **This warning is outdated.** A new music-services implementation on this
+   branch reworks the authentication flow described below and restores most of
+   the affected services — see the `Music Services`_ section for how to use it.
+
 Sonos has changed the way music service authentication works, and **a number of streaming services currently have known issues or cannot be used at all**. Known affected services include Apple Music, Amazon Music, Spotify, and Napster.
 
 Support for these services is an ongoing effort. See the project's `GitHub Issues <https://github.com/SoCo/SoCo/issues>`_ for current status.
+
+Music Services
+--------------
+
+A major rework of SoCo's music-services support is in progress on the
+`music-services branch <https://github.com/BookCatKid/SoCo/tree/music-services>`_
+of this fork. It targets the newer Sonos APIs and re-enables services whose
+authentication no longer works through the old flow (Apple Music, Amazon Music,
+Spotify, …).
+
+It is **not finished yet**, but most of it works. Everything below imports from
+``soco.music_services``, and the old ``MusicService`` API is unchanged and still
+available.
+
+Three new building blocks
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- ``MusicServiceBrowser`` — browse and search any music service using the
+  credentials Sonos already stores for your household. No manual token setup is
+  needed, and services which use the newer manifest/content-home-page transport
+  (not just legacy SMAPI) are supported.
+- ``MusicServiceAccountManager`` — add new accounts (OAuth ``DeviceLink`` /
+  ``AppLink`` or legacy username/password), re-link and rename existing ones, and
+  remove them again.
+- ``ConfiguredMusicServiceAccount`` — read the accounts currently configured in
+  your household (useful for listing them, and for passing a specific account to
+  the browser when several exist).
+
+Browse and search
+^^^^^^^^^^^^^^^^^
+
+.. code:: python
+
+    from soco.music_services import MusicServiceBrowser
+
+    # Uses the account already linked to this household.
+    browser = MusicServiceBrowser("Apple Music")
+
+    root = browser.get_metadata()       # the root container
+    for item in root.items:             # MusicServiceBrowseItem objects
+        print(item.title, item.item_id)
+
+    child = browser.get_metadata(root.items[0])   # browse into an item
+    tracks = browser.search("tracks", "miles davis")
+    for track in tracks.items:
+        print(track.title, track.artist)
+
+Add and manage accounts
+^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: python
+
+    from soco.music_services import MusicServiceAccountManager
+
+    manager = MusicServiceAccountManager("Spotify")
+    link = manager.begin_link()         # nothing is changed yet
+    # Ask the user to open link.registration_url and authorize in their browser
+    # (some services also ask for link.link_code to be entered on the page).
+    added = manager.commit_link(link)   # installs the account in the household
+
+    manager.set_nickname(added.account_udn, "Living Room")
+    manager.remove_account(added.account_udn)
+
+Anonymous and username/password services are added directly:
+
+.. code:: python
+
+    manager = MusicServiceAccountManager("TuneIn")
+    manager.add_credentials()           # anonymous services need no credentials
+
+Example app
+^^^^^^^^^^^
+
+The `music-service explorer
+<https://github.com/BookCatKid/SoCo/tree/music-services/examples/music_service_explorer>`_
+demonstrates every read-only feature (browse, search, metadata) plus an Accounts
+tab for onboarding:
+
+.. code:: bash
+
+    pip install -r examples/music_service_explorer/requirements.txt
+    python examples/music_service_explorer/app.py   # http://127.0.0.1:5050
+
+Notes
+^^^^^
+
+- Browsing configured accounts needs either the ``cryptography`` package or an
+  ``openssl`` executable on your system (used to decrypt the account payload
+  Sonos sends to the players).
+- The new API is read-only as far as playback is concerned: it browses, searches
+  and inspects metadata, but nothing is played or queued unless you do it with
+  the rest of SoCo.
+- Testing against real Sonos setups is very welcome, as is feedback on the API
+  design — please open an issue or PR on this fork.
 
 Installation
 ------------
@@ -144,7 +244,7 @@ SoCo supports the following controls amongst others:
 -  Search for and play music items:
 
    -  Local music library
-   -  Webradio via TuneIn and music services (note: some services have known issues — see Warning above)
+   -  Webradio via TuneIn and music services (see the `Music Services`_ section above for current status)
    -  Saved Sonos favorites, favorite radio stations and shows
 
 -  Switch the speaker’s source to line-in or TV input (if the Zone Player
