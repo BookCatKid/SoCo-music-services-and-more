@@ -640,6 +640,10 @@ def test_get_media_metadata_is_read_only(monkeypatch):
     assert browser._children(envelope, "getMediaMetadata")
     assert not browser._children(envelope, "AddAccountX")
     assert not browser._children(envelope, "AddOAuthAccountX")
+    # SMAPI providers reject the plain household identity (InvalidToken);
+    # get_media_metadata must use the account-scoped device identity.
+    household = browser._children(envelope, "householdId")
+    assert household and household[0].text == "Sonos_household_00abcdef"
 
 
 def test_get_media_uri_returns_streaming_uri(monkeypatch):

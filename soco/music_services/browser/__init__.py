@@ -538,7 +538,10 @@ class MusicServiceBrowser:
     def get_media_metadata(self, item):
         """Return provider metadata for one item without changing playback."""
         object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
-        return self._client.get_media_metadata(object_id)
+        # SMAPI providers (Apple among them) reject calls under the plain
+        # household identity with InvalidTokenException; use the account-
+        # scoped device identity like every other SMAPI call here.
+        return self._scoped_client().get_media_metadata(object_id)
 
     def get_media_uri(self, item):
         """Return the provider streaming URI for one item.
