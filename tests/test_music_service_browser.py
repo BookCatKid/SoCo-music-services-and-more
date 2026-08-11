@@ -653,7 +653,8 @@ def test_get_media_uri_returns_streaming_uri(monkeypatch):
     </s:Envelope>
     """
     session = FakeSession(post_responses=[FakeResponse(content=media_uri)])
-    service = FakeService()
+    # Bearer capability (bit 3) advertises controller-side dereference.
+    service = FakeService(capabilities="8")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
     music_browser = MusicServiceBrowser(
         "Example", account=make_account(), device=FakeDevice(), session=session
@@ -679,7 +680,8 @@ def test_get_media_uri_accepts_browse_item(monkeypatch):
     </s:Envelope>
     """
     session = FakeSession(post_responses=[FakeResponse(content=media_uri)])
-    service = FakeService()
+    # Bearer capability (bit 3) advertises controller-side dereference.
+    service = FakeService(capabilities="8")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
     music_browser = MusicServiceBrowser(
         "Example", account=make_account(), device=FakeDevice(), session=session
@@ -691,6 +693,21 @@ def test_get_media_uri_accepts_browse_item(monkeypatch):
     assert uri == "https://cdn.example.invalid/track.mp3"
 
 
+def test_get_media_uri_raises_for_player_resolved_services(monkeypatch):
+    """Services without Bearer/device-cert capabilities resolve on the player."""
+    service = FakeService(capabilities="0")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=FakeSession()
+    )
+
+    item = MusicServiceBrowseItem("track:1", "Title", "mediaMetadata")
+    with pytest.raises(
+        MusicServiceException, match="resolves playback on the player"
+    ):
+        music_browser.get_media_uri(item)
+
+
 def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
     service = FakeService(service_id="204")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
@@ -700,7 +717,10 @@ def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
 
     uri = music_browser.sonos_uri_from_id("spotify:track:2qs5ZcLByNTctJKbhAZ9JE")
 
-    assert uri == "soco://spotify%3Atrack%3A2qs5ZcLByNTctJKbhAZ9JE?sid=204&sn=3"
+    assert (
+        uri
+        == "x-sonosapi-stream:spotify%3Atrack%3A2qs5ZcLByNTctJKbhAZ9JE?sid=204&sn=3"
+    )
 
 
 def test_get_extended_metadata_parses_related_items_and_text(monkeypatch):

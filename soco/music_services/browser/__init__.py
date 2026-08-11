@@ -541,15 +541,36 @@ class MusicServiceBrowser:
         return self._client.get_media_metadata(object_id)
 
     def get_media_uri(self, item):
-        """Return the provider streaming URI for one item."""
+        """Return the provider streaming URI for one item.
+
+        Controller-side dereference is only possible for services which
+        advertise the Bearer (bit 3) or device-cert (bit 17) capabilities
+        that the desktop controller keys its getMediaURI headers from. For
+        other services (Amazon Music among them) the player resolves the
+        stream itself; use :meth:`sonos_uri_from_id` instead of calling the
+        provider's getMediaURI, which rejects controller-side dereference.
+        """
+        capabilities = int(self.music_service.capabilities)
+        if not (capabilities & 8) and not (capabilities & (1 << 17)):
+            raise MusicServiceException(
+                f"{self.music_service.service_name} resolves playback on "
+                "the player; use sonos_uri_from_id() to build a playable URI"
+            )
         object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
         return self._scoped_client().get_media_uri(object_id)
 
     def sonos_uri_from_id(self, item_id):
-        """Return a URI which can be sent to a player for playing."""
+        """Return a URI which can be sent to a player for playing.
+
+        The URI uses the ``x-sonosapi-stream:`` scheme: the player itself
+        resolves the provider stream, which is how the desktop controller
+        plays content for services that do not advertise the Bearer or
+        device-cert capabilities that would let the controller dereference
+        playback directly.
+        """
         encoded = quote_url(str(item_id).encode("utf-8"))
         return (
-            f"soco://{encoded}?sid={self.music_service.service_id}"
+            f"x-sonosapi-stream:{encoded}?sid={self.music_service.service_id}"
             f"&sn={self.account.serial_number}"
         )
 
