@@ -213,7 +213,10 @@ class SoCo(_SocoSingletonBase):
         add_uri_to_queue
         add_multiple_to_queue
         remove_from_queue
+        remove_range_from_queue
         clear_queue
+        reorder_queue
+        move_in_queue
 
     ..  rubric:: Group Management
     ..  autosummary::
@@ -2455,6 +2458,99 @@ class SoCo(_SocoSingletonBase):
                 ("InstanceID", 0),
             ]
         )
+
+    @only_on_master
+    def remove_range_from_queue(self, start, num_tracks, update_id=0):
+        """Remove a block of tracks from the queue.
+
+        Args:
+            start (int): The 0-based index of the first track to remove.
+            num_tracks (int): The number of tracks to remove.
+            update_id (int): The queue's update id. Defaults to 0; pass
+                ``device.get_queue().update_id`` to operate on the latest
+                queue state.
+
+        Returns:
+            int: The new queue update id, to be passed as ``update_id`` on
+            the next queue-modifying call.
+        """
+        # Sonos uses a 1-based starting index here, unlike most other
+        # queue operations.
+        response = self.avTransport.RemoveTrackRangeFromQueue(
+            [
+                ("InstanceID", 0),
+                ("UpdateID", update_id),
+                ("StartingIndex", start + 1),
+                ("NumberOfTracks", num_tracks),
+            ]
+        )
+        return int(response["NewUpdateID"])
+
+    @only_on_master
+    def reorder_queue(self, start, num_tracks, insert_before):
+        """Reorder a block of tracks in the queue.
+
+        Uses the Sonos ``ReorderTracksInQueue`` action, which moves a
+        contiguous block of tracks in a single round-trip. The queue's
+        update id is passed as 0, which the speakers accept as "operate
+        on the current queue state" (this is what the Sonos controllers
+        send).
+
+        Args:
+            start (int): The 0-based index of the first track to move.
+            num_tracks (int): The number of tracks to move.
+            insert_before (int): The 0-based index of the track before which
+                the moved block is inserted, evaluated against the queue
+                *before* the move. Use the queue length (or a larger value)
+                to move the block to the end.
+
+        Raises:
+            ValueError: If ``start``, ``num_tracks`` or ``insert_before`` are
+                invalid for the current queue.
+
+        Example:
+            Move the 3rd track (index 2) to the front of the queue::
+
+                device.reorder_queue(2, 1, 0)
+        """
+        queue_length = self.queue_size
+        if (
+            start < 0
+            or num_tracks <= 0
+            or insert_before < 0
+            or start + num_tracks > queue_length
+        ):
+            raise ValueError(
+                "Invalid start, num_tracks or insert_before for queue of "
+                "length %d" % queue_length
+            )
+        if insert_before == start or insert_before == start + num_tracks:
+            return
+        # StartingIndex and InsertBefore are 1-based positions in the queue
+        # as it stands before the move; insert_before is the position before
+        # which the block is inserted, so passing queue_length + 1 (or more)
+        # moves the block to the end.
+        self.avTransport.ReorderTracksInQueue(
+            [
+                ("InstanceID", 0),
+                ("StartingIndex", start + 1),
+                ("NumberOfTracks", num_tracks),
+                ("InsertBefore", insert_before + 1),
+                ("UpdateID", 0),
+            ]
+        )
+
+    @only_on_master
+    def move_in_queue(self, start, new_pos):
+        """Move a single track to a new position in the queue.
+
+        Args:
+            start (int): The 0-based index of the track to move.
+            new_pos (int): The 0-based index of the track before which the
+                track is inserted, evaluated against the queue before the
+                move. Use the queue length to move the track to the end.
+        """
+        self.reorder_queue(start, 1, new_pos)
 
     @deprecated("0.13", "soco.music_library.get_favorite_radio_shows", "0.15", True)
     def get_favorite_radio_shows(self, start=0, max_items=100):
