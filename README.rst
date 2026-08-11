@@ -18,11 +18,9 @@ Visit the `SoCo documentation`_ for a more detailed overview of the functionalit
 WARNING
 -------
 
-.. note::
-
-   **This warning is outdated.** A new music-services implementation on this
-   branch reworks the authentication flow described below and restores most of
-   the affected services — see the `Music Services`_ section for how to use it.
+**This warning is outdated.** A new music-services implementation on this
+branch reworks the authentication flow described below and restores most of
+the affected services — see the `Music Services`_ section below for how to use it.
 
 Sonos has changed the way music service authentication works, and **a number of streaming services currently have known issues or cannot be used at all**. Known affected services include Apple Music, Amazon Music, Spotify, and Napster.
 
