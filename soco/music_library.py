@@ -14,8 +14,13 @@ from urllib.parse import quote as quote_url
 import xmltodict
 
 from . import discovery
-from .data_structures import SearchResult, DidlResource, DidlObject, DidlMusicAlbum
 from .data_structures_entry import from_didl_string
+from .data_structures import (
+    SearchResult,
+    DidlResource,
+    DidlObject,
+    DidlMusicAlbum,
+)
 from .exceptions import SoCoUPnPException
 from .utils import url_escape_path, really_unicode, camel_to_underscore
 
