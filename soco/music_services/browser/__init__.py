@@ -21,13 +21,13 @@ item id (percent-decode, strip the 8-hex service prefix and any
 and play that. Track URIs carry signed URLs that expire; re-resolving the
 embedded id through the player is the reliable fallback.
 
-A household can configure **several accounts for one service** (eg two
-Amazon Music logins). ``get_accounts()`` lists them with nicknames; when
-building a browser for playback, a client should try each account until
-one plays - an account may be provisioned but its provider can still
-reject playback (``LoginDisabled``). Pick a working account once and reuse
-it, and prefer an account explicitly over letting the browser guess when
-more than one exists.
+A favorite remembers the account it was saved from: the ``cdudn`` in its
+reference carries the account UID that appears in the account UDN
+(``SA_RINCON…-<uid>-Token``). That account can later disappear or break
+(it is removed, re-authorized, or its provider starts rejecting playback
+with ``LoginDisabled``). A client should detect when a favorite's account
+is missing or broken and prompt the user to switch the favorite to a
+different configured account, rather than guessing which one to use.
 """
 
 from __future__ import unicode_literals
