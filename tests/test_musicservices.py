@@ -598,6 +598,34 @@ def test_desc():
     assert spreaker.desc == "SA_RINCON41735_"
 
 
+def test_begin_authentication_is_deprecated():
+    spotify = MusicService("Spotify")
+    spotify.soap_client.begin_authentication = mock.Mock(
+        return_value=("https://reg.example/", "CODE", "dev")
+    )
+
+    with pytest.warns(
+        UserWarning, match="deprecated.*MusicServiceAccountManager"
+    ):
+        reg_url = spotify.begin_authentication()
+
+    assert reg_url == "https://reg.example/"
+
+
+def test_complete_authentication_is_deprecated():
+    spotify = MusicService("Spotify")
+    spotify.soap_client.complete_authentication = mock.Mock()
+
+    with pytest.warns(
+        UserWarning, match="deprecated.*MusicServiceAccountManager"
+    ):
+        spotify.complete_authentication("CODE")
+
+    spotify.soap_client.complete_authentication.assert_called_once_with(
+        "CODE", spotify.link_device_id
+    )
+
+
 # def test_desc_from_uri():
 #     URI = "x-sonos-http:track%3a3402413.mp3?sid=2&amp;flags=32&amp;sn=1"
 #     assert desc_from_uri(URI) == "SA_RINCON2311_12345678"

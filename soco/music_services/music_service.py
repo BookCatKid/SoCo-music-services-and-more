@@ -36,6 +36,7 @@ from ..exceptions import MusicServiceException, MusicServiceAuthException
 from .data_structures import parse_response, MusicServiceItem
 from .token_store import JsonFileTokenStore
 from ..soap import SoapFault, SoapMessage
+from ..utils import deprecated
 from ..xml import XML
 
 log = logging.getLogger(__name__)  # pylint: disable=C0103
@@ -825,6 +826,7 @@ class MusicService:
             desc = f"SA_RINCON{self.service_type}_"
         return desc
 
+    @deprecated("0.32", "soco.music_services.MusicServiceAccountManager", "0.35")
     def begin_authentication(self):
         """Perform the first part of a Device or App Link authentication session
 
@@ -853,6 +855,7 @@ class MusicService:
         ) = self.soap_client.begin_authentication()
         return reg_url
 
+    @deprecated("0.32", "soco.music_services.MusicServiceAccountManager", "0.35")
     def complete_authentication(self, link_code=None, link_device_id=None):
         """Completes a previously initiated device or app link authentication session
 
