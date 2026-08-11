@@ -84,7 +84,7 @@ class MusicServiceBrowser:
         service_name,
         account=None,
         device=None,
-        allow_credential_refresh=False,
+        allow_credential_refresh=True,
         explicit_content=False,
         time_zone=None,
         session=None,

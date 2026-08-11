@@ -1010,6 +1010,8 @@ def test_plain_text_unauthorized_is_an_auth_fault_not_malformed_xml():
     # Sonos Radio answers with the literal text ``Unauthorized`` (HTTP 200)
     # when the token it is given is unusable.
     session = FakeSession(post_responses=[FakeResponse(content=b"Unauthorized")])
+    # Refresh is on by default now; this test is about error classification,
+    # so opt out to keep it focused on the plain-text fault surfacing.
     client = browser._ConfiguredSmapiClient(
         FakeService(),
         make_account(),
@@ -1018,6 +1020,7 @@ def test_plain_text_unauthorized_is_an_auth_fault_not_malformed_xml():
         "player-device-id",
         "controller-id",
         "UTC",
+        allow_credential_refresh=False,
         session=session,
     )
 
@@ -1057,7 +1060,7 @@ def test_anonymous_service_does_not_capture_account_event(monkeypatch):
     assert music_browser.account.token == ""
 
 
-def test_content_http_401_does_not_refresh_by_default(monkeypatch):
+def test_content_http_401_does_not_refresh_when_disabled(monkeypatch):
     manifest = {
         "endpoints": [
             {"type": "browse", "uri": "https://content.invalid/browse/v1"}
@@ -1069,13 +1072,85 @@ def test_content_http_401_does_not_refresh_by_default(monkeypatch):
     service = FakeService(manifest_uri="https://content.invalid/manifest.json")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
     music_browser = MusicServiceBrowser(
-        "Example", account=make_account(), device=FakeDevice(), session=session
+        "Example",
+        account=make_account(),
+        device=FakeDevice(),
+        session=session,
+        allow_credential_refresh=False,
     )
 
     with pytest.raises(MusicServiceAuthException, match="HTTP 401"):
         music_browser.get_metadata()
 
     assert len(session.get_calls) == 2
+
+
+def test_content_http_401_refreshes_by_default(monkeypatch):
+    manifest = {
+        "endpoints": [
+            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
+        ]
+    }
+    refresh_response = b"""\
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+      <s:Body>
+        <refreshAuthTokenResponse xmlns="http://www.sonos.com/Services/1.1">
+          <refreshAuthTokenResult>
+            <authToken>new-token</authToken><privateKey>new-key</privateKey>
+          </refreshAuthTokenResult>
+        </refreshAuthTokenResponse>
+      </s:Body>
+    </s:Envelope>
+    """
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(json_value=manifest),
+            FakeResponse(status_code=401),
+            FakeResponse(json_value={"views": []}),
+        ],
+        post_responses=[FakeResponse(content=refresh_response)],
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    account = make_account()
+    music_browser = MusicServiceBrowser(
+        "Example", account=account, device=FakeDevice(), session=session
+    )
+
+    root = music_browser.get_metadata()
+
+    assert root.transport == "content"
+    assert account.token == "new-token"
+    assert account.key == "new-key"
+    # manifest + 401 + retried page
+    assert len(session.get_calls) == 3
+    assert len(session.post_calls) == 1
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "refreshAuthToken")
+
+
+def test_credential_refresh_is_enabled_by_default(monkeypatch):
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=FakeSession()
+    )
+
+    assert music_browser.allow_credential_refresh is True
+    assert music_browser._client.allow_credential_refresh is True
+
+    client = browser._ConfiguredSmapiClient(
+        FakeService(),
+        make_account(),
+        FakeDevice(),
+        FakeDevice.household_id,
+        "player-device-id",
+        "controller-id",
+        "UTC",
+        session=FakeSession(),
+    )
+    assert client.allow_credential_refresh is True
 
 
 PMAP_XML = b"""\

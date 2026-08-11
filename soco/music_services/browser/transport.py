@@ -37,7 +37,7 @@ class _ConfiguredSmapiClient:
         controller_id,
         time_zone,
         explicit_content=False,
-        allow_credential_refresh=False,
+        allow_credential_refresh=True,
         session=None,
     ):
         self.music_service = music_service
@@ -302,8 +302,10 @@ class _ConfiguredSmapiClient:
 
         The desktop controller updates its active account model here; it does
         not call ``RefreshAccountCredentialsX`` on the Sonos player. Credential
-        refresh is opt-in on :class:`MusicServiceBrowser` because it is not a
-        pure metadata read from the provider.
+        refresh is enabled by default on :class:`MusicServiceBrowser` because
+        expired tokens are the common failure mode when browsing; pass
+        ``allow_credential_refresh=False`` to opt out. It is not a pure
+        metadata read from the provider.
         """
         if self.account.token == "needs_reauth":
             raise MusicServiceAuthException(
