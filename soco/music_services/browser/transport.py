@@ -606,6 +606,51 @@ class _ConfiguredSmapiClient:
         value = _as_mapping(_element_value(results[0]))
         return dict(value) if value else {"value": value}
 
+    def get_scroll_indices(self, object_id):
+        """Return the scroll index entries for one container.
+
+        Providers use this to build alphabetical jump bars: the response lists
+        the position and identity of the jump-point items in the container's
+        sorted order. Entries are kept in the provider's own shape.
+        """
+        try:
+            root = self._request_with_refresh("getScrollIndices", {"id": object_id})
+        except _BrowseSoapFault as fault:
+            if self._is_expired_fault(fault):
+                raise MusicServiceAuthException(str(fault)) from fault
+            raise fault.as_music_service_exception() from fault
+        results = _children(root, "getScrollIndicesResult")
+        result = results[0] if results else root
+        entries = []
+        total = None
+        for child in result:
+            name = _local_name(child.tag)
+            if name == "index":
+                value = _as_mapping(_element_value(child))
+                if value:
+                    entries.append(dict(value))
+                else:
+                    entries.append({"index": (child.text or "").strip()})
+            elif name in ("total", "count") and (child.text or "").strip().isdigit():
+                total = int(child.text.strip())
+        return {"total": total, "indices": entries}
+
+    def set_played_seconds(self, object_id, seconds):
+        """Report listening progress for one item back to the provider.
+
+        ``seconds`` is the number of seconds played so far; services that
+        track progress (podcasts, audiobooks) use it to resume playback.
+        """
+        try:
+            self._request_with_refresh(
+                "setPlayedSeconds", {"id": object_id, "seconds": str(int(seconds))}
+            )
+        except _BrowseSoapFault as fault:
+            if self._is_expired_fault(fault):
+                raise MusicServiceAuthException(str(fault)) from fault
+            raise fault.as_music_service_exception() from fault
+        return None
+
 
 class _BrowseSoapFault(Exception):
     """Internal representation of a provider SOAP fault."""

@@ -1343,3 +1343,98 @@ def test_get_presentation_map_raises_on_malformed_xml(monkeypatch):
 
     with pytest.raises(MusicServiceException, match="not valid XML"):
         music_browser.get_presentation_map()
+
+
+SCROLL_INDICES = b"""\
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <getScrollIndicesResponse xmlns="http://www.sonos.com/Services/1.1">
+      <getScrollIndicesResult>
+        <total>2</total>
+        <index>
+          <index>0</index><id>album:0</id><title>A</title>
+        </index>
+        <index>
+          <index>100</index><id>album:100</id><title>B</title>
+        </index>
+      </getScrollIndicesResult>
+    </getScrollIndicesResponse>
+  </s:Body>
+</s:Envelope>
+"""
+
+
+def test_get_scroll_indices_parses_jump_entries(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SCROLL_INDICES)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    data = music_browser.get_scroll_indices("albums")
+
+    assert data["total"] == 2
+    assert data["indices"] == [
+        {"index": "0", "id": "album:0", "title": "A"},
+        {"index": "100", "id": "album:100", "title": "B"},
+    ]
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    assert browser._children(envelope, "getScrollIndices")
+    assert browser._children(envelope, "id")[0].text == "albums"
+
+
+def test_get_scroll_indices_accepts_browse_item(monkeypatch):
+    session = FakeSession(post_responses=[FakeResponse(content=SCROLL_INDICES)])
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    data = music_browser.get_scroll_indices(
+        MusicServiceBrowseItem("albums", "Albums", "mediaCollection")
+    )
+
+    assert data["indices"][0]["id"] == "album:0"
+
+
+def test_set_played_seconds_sends_progress(monkeypatch):
+    session = FakeSession(
+        post_responses=[
+            FakeResponse(
+                content=(
+                    b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+                    b"<s:Body><getSetPlayedSecondsResponse/>"
+                    b"</s:Body></s:Envelope>"
+                )
+            )
+        ]
+    )
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    result = music_browser.set_played_seconds("track:1", 42)
+
+    assert result is None
+    _url, request = session.post_calls[0]
+    envelope = XML.fromstring(request["data"])
+    op = browser._children(envelope, "setPlayedSeconds")[0]
+    fields = {browser._local_name(node.tag): node.text or "" for node in op}
+    assert fields == {"id": "track:1", "seconds": "42"}
+
+
+def test_set_played_seconds_requires_integer_seconds(monkeypatch):
+    session = FakeSession()
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    with pytest.raises(ValueError, match="invalid literal"):
+        music_browser.set_played_seconds("track:1", "not-a-number")

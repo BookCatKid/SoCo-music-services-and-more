@@ -574,6 +574,16 @@ class MusicServiceBrowser:
         """Return provider catalog/favorites change timestamps."""
         return self._scoped_client().get_last_update()
 
+    def get_scroll_indices(self, item):
+        """Return the scroll index entries for one container (jump bars)."""
+        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
+        return self._scoped_client().get_scroll_indices(object_id)
+
+    def set_played_seconds(self, item, seconds):
+        """Report listening progress for one item back to the provider."""
+        object_id = item.item_id if isinstance(item, MusicServiceBrowseItem) else item
+        self._scoped_client().set_played_seconds(object_id, seconds)
+
 
 __all__ = [
     "ConfiguredMusicServiceAccount",

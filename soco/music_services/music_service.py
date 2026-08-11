@@ -892,7 +892,6 @@ class MusicService:
     #    createItem(xs:string favorite)
     #    createTrialAccount(xs:string deviceId)
     #    deleteItem(xs:string favorite)
-    #    getAccount()
     #    getExtendedMetadata(xs:string id)
     #    getExtendedMetadataText(xs:string id, xs:string Type)
     #    getLastUpdate()
@@ -900,12 +899,12 @@ class MusicService:
     #    getMediaURI(xs:string id)
     #    getMetadata(xs:string id, xs:int index, xs:int count,xs:boolean
     #                recursive)
-    #    getScrollIndices(xs:string id)
     #    getSessionId(xs:string username, xs:string password)
+    #    getScrollIndices(xs:string id)
     #    mergeTrialccount(xs:string deviceId)
     #    rateItem(id id, xs:integer rating)
     #    search(xs:string id, xs:string term, xs:string index, xs:int count)
-    #    setPlayedSeconds(id id, xs:int seconds)
+    #    setPlayedSeconds(xs:string id, xs:int seconds)
 
     def get_metadata(
         self,
@@ -1128,3 +1127,29 @@ class MusicService:
             "getExtendedMetadataText", [("id", item_id), ("type", metadata_type)]
         )
         return response.get("getExtendedMetadataTextResult", None)
+
+    def get_scroll_indices(self, item_id):
+        """Get the scroll indices for a container.
+
+        The provider returns the position and identity of jump-point items in
+        the container's sorted order, used for alphabetical navigation.
+
+        Args:
+            item_id (str): The id of a browsable container.
+
+        Returns:
+            ~collections.OrderedDict: The provider's scroll index entries.
+        """
+        response = self.soap_client.call("getScrollIndices", [("id", item_id)])
+        return response.get("getScrollIndicesResult", None)
+
+    def set_played_seconds(self, item_id, seconds):
+        """Report listening progress for an item to the provider.
+
+        Args:
+            item_id (str): The id of a playable item.
+            seconds (int): The number of seconds played so far.
+        """
+        self.soap_client.call(
+            "setPlayedSeconds", [("id", item_id), ("seconds", int(seconds))]
+        )
