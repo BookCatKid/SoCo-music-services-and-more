@@ -1091,66 +1091,9 @@ class SoCo(_SocoSingletonBase):
             [("InstanceID", 0), ("Channel", "Master"), ("DesiredVolume", volume)]
         )
 
-    @property
-    def volume_db(self):
-        """int: The current volume in decibels (dB).
-
-        Unlike :attr:`volume`, this is an absolute dB value; the available
-        range is given by :attr:`volume_db_range`.
-
-        Returns `None` on speakers whose firmware does not implement the
-        underlying ``GetVolumeDB`` action (observed on current S2
-        firmware, where the action is advertised but rejected).
-        """
-        try:
-            response = self.renderingControl.GetVolumeDB(
-                [("InstanceID", 0), ("Channel", "Master")]
-            )
-        except SoCoUPnPException:
-            return None
-        return int(response["CurrentVolume"])
-
-    @volume_db.setter
-    def volume_db(self, volume_db):
-        """Set the volume in decibels. See :attr:`volume_db_range`.
-
-        Raises `SoCoUPnPException` on speakers that do not implement
-        ``SetVolumeDB``.
-        """
-        self.renderingControl.SetVolumeDB(
-            [("InstanceID", 0), ("Channel", "Master"), ("DesiredVolume", volume_db)]
-        )
-
-    @property
-    def volume_db_range(self):
-        """tuple: The (minimum, maximum) volume in decibels.
-
-        Different devices have different ranges (e.g. ``(-32, 0)`` on most
-        speakers). Values from :attr:`volume_db` fall within this range.
-
-        Returns `None` on speakers that do not implement ``GetVolumeDBRange``.
-        """
-        try:
-            response = self.renderingControl.GetVolumeDBRange(
-                [("InstanceID", 0), ("Channel", "Master")]
-            )
-        except SoCoUPnPException:
-            return None
-        return int(response["MinValue"]), int(response["MaxValue"])
-
     def reset_basic_eq(self):
         """Reset bass, treble, loudness and balance to their defaults."""
         self.renderingControl.ResetBasicEQ([("InstanceID", 0)])
-
-    def reset_ext_eq(self, eq_type):
-        """Reset an extended EQ setting to its default.
-
-        Args:
-            eq_type (str): The EQ to reset, e.g. ``'SubGain'``,
-                ``'SubCrossover'``, ``'SurroundLevel'`` or
-                ``'HeightChannelLevel'``.
-        """
-        self.renderingControl.ResetExtEQ([("InstanceID", 0), ("EQType", eq_type)])
 
     @property
     def headphone_connected(self):
@@ -2797,44 +2740,12 @@ class SoCo(_SocoSingletonBase):
         warnings.warn(message, stacklevel=2)
         return self.__get_favorites(SONOS_FAVORITES, start, max_items)
 
-    def add_uri_to_favorites(
-        self, uri, title, protocol_info="http-get:*:audio/mpeg:*"
-    ):
-        """Add a URI (typically a radio stream) to Sonos favorites.
-
-        See :meth:`MusicLibrary.add_uri_to_favorites` for details.
-
-        Returns:
-            str: The new favorite's object id.
-        """
-        return self.music_library.add_uri_to_favorites(uri, title, protocol_info)
-
-    def add_item_to_favorites(self, item):
-        """Add a playable library item to Sonos favorites.
-
-        See :meth:`MusicLibrary.add_item_to_favorites` for details.
-
-        Returns:
-            str: The new favorite's object id.
-        """
-        return self.music_library.add_item_to_favorites(item)
-
     def remove_from_favorites(self, favorite_id):
         """Remove a favorite from Sonos favorites by its object id.
 
         See :meth:`MusicLibrary.remove_from_favorites`.
         """
         self.music_library.remove_from_favorites(favorite_id)
-
-    def add_library_share(self, share_name):
-        """Add a music library share.
-
-        See :meth:`MusicLibrary.add_library_share` for details.
-
-        Returns:
-            str: The new share's object id.
-        """
-        return self.music_library.add_library_share(share_name)
 
     def __get_favorites(self, favorite_type, start=0, max_items=100):
         """Helper method for `get_favorite_radio_*` methods.

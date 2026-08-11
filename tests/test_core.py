@@ -546,49 +546,9 @@ class TestSoco:
             [("InstanceID", 0), ("EQType", "SpeechEnhanceEnabled"), ("DesiredValue", 1)]
         )
 
-    def test_volume_db(self, moco):
-        moco.renderingControl.GetVolumeDB.return_value = {"CurrentVolume": "-12"}
-        assert moco.volume_db == -12
-        moco.renderingControl.GetVolumeDB.assert_called_once_with(
-            [("InstanceID", 0), ("Channel", "Master")]
-        )
-
-    def test_volume_db_set(self, moco):
-        moco.volume_db = -20
-        moco.renderingControl.SetVolumeDB.assert_called_once_with(
-            [("InstanceID", 0), ("Channel", "Master"), ("DesiredVolume", -20)]
-        )
-
-    def test_volume_db_unsupported(self, moco):
-        """volume_db returns None when the firmware rejects GetVolumeDB."""
-        moco.renderingControl.GetVolumeDB.side_effect = SoCoUPnPException(
-            "800", "800", "xml"
-        )
-        assert moco.volume_db is None
-        moco.renderingControl.GetVolumeDBRange.side_effect = SoCoUPnPException(
-            "800", "800", "xml"
-        )
-        assert moco.volume_db_range is None
-
-    def test_volume_db_range(self, moco):
-        moco.renderingControl.GetVolumeDBRange.return_value = {
-            "MinValue": "-32",
-            "MaxValue": "0",
-        }
-        assert moco.volume_db_range == (-32, 0)
-        moco.renderingControl.GetVolumeDBRange.assert_called_once_with(
-            [("InstanceID", 0), ("Channel", "Master")]
-        )
-
     def test_reset_basic_eq(self, moco):
         moco.reset_basic_eq()
         moco.renderingControl.ResetBasicEQ.assert_called_once_with([("InstanceID", 0)])
-
-    def test_reset_ext_eq(self, moco):
-        moco.reset_ext_eq("SubGain")
-        moco.renderingControl.ResetExtEQ.assert_called_once_with(
-            [("InstanceID", 0), ("EQType", "SubGain")]
-        )
 
     def test_headphone_connected(self, moco):
         moco.renderingControl.GetHeadphoneConnected.return_value = {
@@ -754,42 +714,11 @@ class TestSoco:
         with pytest.raises(SoCoUPnPException):
             moco.running_alarm()
 
-    def test_add_uri_to_favorites(self, moco):
-        moco.add_uri_to_favorites("http://x/stream.mp3", "My Stream")
-        moco.contentDirectory.CreateObject.assert_called_once()
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        assert ("ContainerID", "FV:2") in args
-
-    def test_add_item_to_favorites(self, moco):
-        from soco.data_structures import DidlMusicTrack, DidlResource
-
-        item = DidlMusicTrack(
-            title="Song",
-            parent_id="A:TRACKS",
-            item_id="A:TRACKS/1",
-            resources=[
-                DidlResource(
-                    uri="http://x/song.mp3",
-                    protocol_info="http-get:*:audio/mpeg:*",
-                )
-            ],
-        )
-        moco.add_item_to_favorites(item)
-        moco.contentDirectory.CreateObject.assert_called_once()
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        assert ("ContainerID", "FV:2") in args
-
     def test_remove_from_favorites(self, moco):
         moco.remove_from_favorites("FV:2/14")
         moco.contentDirectory.DestroyObject.assert_called_once_with(
             [("ObjectID", "FV:2/14")]
         )
-
-    def test_add_library_share(self, moco):
-        moco.add_library_share("//nas/music")
-        moco.contentDirectory.CreateObject.assert_called_once()
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        assert ("ContainerID", "S:") in args
 
 
 class TestAVTransport:

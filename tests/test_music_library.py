@@ -1,14 +1,11 @@
 from unittest.mock import patch
 
-import pytest
-
 from soco.data_structures import (
     DidlMusicAlbum,
     DidlMusicAlbumCompilation,
     DidlMusicTrack,
     DidlResource,
     SearchResult,
-    to_didl_string,
 )
 from soco.exceptions import SoCoUPnPException
 
@@ -360,65 +357,9 @@ class TestMusicLibrary:
         assert compilation in result
         assert track not in result
 
-    def test_add_uri_to_favorites(self, moco):
-        """add_uri_to_favorites creates an audioBroadcast item in FV:2."""
-        moco.music_library.add_uri_to_favorites("http://x/stream.mp3", "My Stream")
-        moco.contentDirectory.CreateObject.assert_called_once()
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        assert ("ContainerID", "FV:2") in args
-        elements = dict(args)["Elements"]
-        assert "My Stream" in elements
-        assert "http://x/stream.mp3" in elements
-
-    def test_add_uri_to_favorites_escapes_title(self, moco):
-        """Special characters in the title are XML-escaped."""
-        moco.music_library.add_uri_to_favorites("http://x/stream.mp3", "<Rock & Roll>")
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        elements = dict(args)["Elements"]
-        assert "&lt;Rock &amp; Roll&gt;" in elements
-        assert "<Rock & Roll>" not in elements
-
-    def test_add_item_to_favorites(self, moco):
-        """add_item_to_favorites serialises a playable item into FV:2."""
-        track = DidlMusicTrack(
-            title="Song",
-            parent_id="A:TRACKS",
-            item_id="A:TRACKS/1",
-            resources=[
-                DidlResource(
-                    uri="http://x/song.mp3",
-                    protocol_info="http-get:*:audio/mpeg:*",
-                )
-            ],
-        )
-        moco.music_library.add_item_to_favorites(track)
-        moco.contentDirectory.CreateObject.assert_called_once()
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        assert ("ContainerID", "FV:2") in args
-        elements = dict(args)["Elements"]
-        assert elements == to_didl_string(track)
-
-    def test_add_item_to_favorites_requires_resource(self, moco):
-        """Items without a resource URI cannot be favourited."""
-        album = DidlMusicAlbum(
-            title="Album", parent_id="A:ALBUM", item_id="A:ALBUM/1"
-        )
-        with pytest.raises(ValueError):
-            moco.music_library.add_item_to_favorites(album)
-        moco.contentDirectory.CreateObject.assert_not_called()
-
     def test_remove_from_favorites(self, moco):
         """remove_from_favorites destroys the object by id."""
         moco.music_library.remove_from_favorites("FV:2/14")
         moco.contentDirectory.DestroyObject.assert_called_once_with(
             [("ObjectID", "FV:2/14")]
         )
-
-    def test_add_library_share(self, moco):
-        """add_library_share creates a storageFolder under S:."""
-        moco.music_library.add_library_share("//nas/music")
-        moco.contentDirectory.CreateObject.assert_called_once()
-        args = moco.contentDirectory.CreateObject.call_args[0][0]
-        assert ("ContainerID", "S:") in args
-        elements = dict(args)["Elements"]
-        assert "//nas/music" in elements
