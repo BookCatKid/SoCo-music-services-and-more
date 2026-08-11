@@ -1,4 +1,4 @@
-'''Manifest-driven content home-page browsing.'''
+"""Manifest-driven content home-page browsing."""
 
 from __future__ import unicode_literals
 
@@ -31,19 +31,17 @@ def _service_manifest(music_service, session):
         response.raise_for_status()
     except requests.RequestException as error:
         raise MusicServiceException(
-            "{} manifest request failed: {}".format(
-                music_service.service_name, error
-            )
+            f"{music_service.service_name} manifest request failed: {error}"
         ) from error
     try:
         manifest = response.json()
     except ValueError as error:
         raise MusicServiceException(
-            "{} manifest was not valid JSON".format(music_service.service_name)
+            f"{music_service.service_name} manifest was not valid JSON"
         ) from error
     if not isinstance(manifest, Mapping):
         raise MusicServiceException(
-            "{} manifest root was not an object".format(music_service.service_name)
+            f"{music_service.service_name} manifest root was not an object"
         )
     return manifest
 
@@ -64,9 +62,7 @@ def _content_endpoint(music_service, session, endpoint_type="browse", manifest=N
         if uri:
             return uri
     raise MusicServiceException(
-        "{} manifest has no {} endpoint".format(
-            music_service.service_name, endpoint_type
-        )
+        f"{music_service.service_name} manifest has no {endpoint_type} endpoint"
     )
 
 
@@ -87,7 +83,7 @@ def _content_headers(
         "Connection": "keep-alive",
     }
     if account.token:
-        headers["Authorization"] = "Bearer {}".format(account.token)
+        headers["Authorization"] = f"Bearer {account.token}"
     capabilities = int(music_service.capabilities)
     if capabilities & (1 << 16) and time_zone:
         headers["X-Sonos-Context-TimeZone"] = time_zone

@@ -1,4 +1,4 @@
-'''SMAPI transport for configured household accounts.'''
+"""SMAPI transport for configured household accounts."""
 
 from __future__ import unicode_literals
 
@@ -134,9 +134,7 @@ class _ConfiguredSmapiClient:
             context = XML.SubElement(header, "{%s}context" % SMAPI_NS)
             XML.SubElement(context, "{%s}timeZone" % SMAPI_NS).text = self.time_zone
             if self.capabilities & (1 << 21) and self.explicit_content:
-                filtering = XML.SubElement(
-                    context, "{%s}contentFiltering" % SMAPI_NS
-                )
+                filtering = XML.SubElement(context, "{%s}contentFiltering" % SMAPI_NS)
                 XML.SubElement(filtering, "{%s}explicit" % SMAPI_NS).text = "true"
 
         body = XML.SubElement(envelope, "{%s}Body" % SOAP_ENV)
@@ -148,24 +146,18 @@ class _ConfiguredSmapiClient:
     def _request(self, action, fields, credential_mode="normal", bearer_token=None):
         endpoint = self.music_service.secure_uri
         if not endpoint.lower().startswith("https://"):
-            raise MusicServiceException(
-                "SMAPI endpoint must use HTTPS: {}".format(endpoint)
-            )
+            raise MusicServiceException(f"SMAPI endpoint must use HTTPS: {endpoint}")
 
         current_bearer = self.account.token if bearer_token is None else bearer_token
         headers = {
             "Content-Type": 'text/xml; charset="utf-8"',
-            "Soapaction": '"{}#{}"'.format(SMAPI_NS, action),
+            "Soapaction": f'"{SMAPI_NS}#{action}"',
             "Accept-Language": "en-US",
             "X-Sonos-Controller-ID": self.controller_id,
             "User-Agent": DESKTOP_USER_AGENT,
         }
-        if (
-            credential_mode != "refresh"
-            and self.capabilities & 8
-            and current_bearer
-        ):
-            headers["Authorization"] = "Bearer {}".format(current_bearer)
+        if credential_mode != "refresh" and self.capabilities & 8 and current_bearer:
+            headers["Authorization"] = f"Bearer {current_bearer}"
 
         try:
             response = self.session.post(
@@ -176,7 +168,7 @@ class _ConfiguredSmapiClient:
             )
         except requests.RequestException as error:
             raise MusicServiceException(
-                "{} request failed: {}".format(self.music_service.service_name, error)
+                f"{self.music_service.service_name} request failed: {error}"
             ) from error
 
         payload = response.content
@@ -189,8 +181,8 @@ class _ConfiguredSmapiClient:
             repaired = payload
             if b"xsi:" in payload and b"xmlns:xsi" not in payload:
                 repaired = re.sub(
-                    br"(<(?:[A-Za-z_][\w.-]*:)?Envelope)(\s)",
-                    br'\1 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\2',
+                    rb"(<(?:[A-Za-z_][\w.-]*:)?Envelope)(\s)",
+                    rb'\1 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\2',
                     payload,
                     count=1,
                 )
@@ -219,14 +211,14 @@ class _ConfiguredSmapiClient:
         if response.status_code != 200:
             raise _BrowseSoapFault(
                 "HTTP",
-                "Unexpected status {}".format(response.status_code),
+                f"Unexpected status {response.status_code}",
                 response.status_code,
             )
         return root
 
     @staticmethod
     def _is_expired_fault(fault):
-        combined = "{} {}".format(fault.code, fault.message).lower()
+        combined = f"{fault.code} {fault.message}".lower()
         return (
             "authtokenexpired" in combined
             or "invalidtoken" in combined
@@ -249,17 +241,17 @@ class _ConfiguredSmapiClient:
             text = stripped.decode("utf-8", "replace")[:200]
             return _BrowseSoapFault("HTTP", text, status_code)
         return MusicServiceException(
-            "{} returned malformed SMAPI XML".format(self.music_service.service_name)
+            f"{self.music_service.service_name} returned malformed SMAPI XML"
         )
 
     @staticmethod
     def _is_invalid_session_fault(fault):
-        combined = "{} {}".format(fault.code, fault.message).lower()
+        combined = f"{fault.code} {fault.message}".lower()
         return "invalidsession" in combined or "invalid session" in combined
 
     @staticmethod
     def _is_transient_fault(fault):
-        combined = "{} {}".format(fault.code, fault.message).lower()
+        combined = f"{fault.code} {fault.message}".lower()
         provider_detail = (
             json.dumps(fault.detail, sort_keys=True).lower()
             if fault.detail is not None
@@ -268,13 +260,17 @@ class _ConfiguredSmapiClient:
         # Apple intermittently returns generic SonosError 999 for a valid
         # collection and succeeds immediately on the identical request.
         provider_retry = '"sonoserror": "999"' in provider_detail
-        return provider_retry or fault.http_status in {408, 429, 502, 503, 504} or any(
-            marker in combined
-            for marker in (
-                "read timed out",
-                "timed out reading",
-                "temporarily unavailable",
-                "try again",
+        return (
+            provider_retry
+            or fault.http_status in {408, 429, 502, 503, 504}
+            or any(
+                marker in combined
+                for marker in (
+                    "read timed out",
+                    "timed out reading",
+                    "temporarily unavailable",
+                    "try again",
+                )
             )
         )
 
@@ -513,17 +509,13 @@ class _ConfiguredSmapiClient:
             raise fault.as_music_service_exception() from fault
         results = _children(root, "getMediaURIResult")
         if not results:
-            raise MusicServiceException(
-                "getMediaURI response did not contain a result"
-            )
+            raise MusicServiceException("getMediaURI response did not contain a result")
         return (results[0].text or "").strip() or None
 
     def get_extended_metadata(self, object_id):
         """Return related items and text for one item."""
         try:
-            root = self._request_with_refresh(
-                "getExtendedMetadata", {"id": object_id}
-            )
+            root = self._request_with_refresh("getExtendedMetadata", {"id": object_id})
         except _BrowseSoapFault as fault:
             if self._is_expired_fault(fault):
                 raise MusicServiceAuthException(str(fault)) from fault
@@ -626,11 +618,11 @@ class _BrowseSoapFault(Exception):
         super().__init__(code, message, http_status)
 
     def __str__(self):
-        return "{}: {} (HTTP {})".format(self.code, self.message, self.http_status)
+        return f"{self.code}: {self.message} (HTTP {self.http_status})"
 
     def as_music_service_exception(self):
         """Return the appropriate existing public SoCo exception."""
-        combined = "{} {}".format(self.code, self.message).lower()
+        combined = f"{self.code} {self.message}".lower()
         if (
             "token" in combined
             or "authorization" in combined

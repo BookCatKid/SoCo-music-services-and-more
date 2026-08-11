@@ -175,7 +175,7 @@ class MusicServiceSoapClient:
             method=method,
             parameters=[] if args is None else args,
             http_headers=self.http_headers,
-            soap_action="http://www.sonos.com/Services/1.1#{0}".format(method),
+            soap_action=f"http://www.sonos.com/Services/1.1#{method}",
             soap_header=self.get_soap_header(),
             namespace=self.namespace,
             timeout=self.timeout,
@@ -186,19 +186,15 @@ class MusicServiceSoapClient:
         except requests.exceptions.RequestException as exc:
             # HTTP/connection failures from the provider are provider errors
             raise MusicServiceException(
-                "Error contacting {}: {}".format(self.music_service.service_name, exc)
+                f"Error contacting {self.music_service.service_name}: {exc}"
             ) from exc
         except SoapFault as exc:
             # Guard against faults with no code (eg Atmosphere)
             if exc.faultcode and "Client.AuthTokenExpired" in exc.faultcode:
                 raise MusicServiceAuthException(
-                    "Authorization for {} expired, is invalid or has not yet been "
-                    "completed: [{} / {} / {}]".format(
-                        self.music_service.service_name,
-                        exc.faultcode,
-                        exc.faultstring,
-                        exc.detail,
-                    )
+                    f"Authorization for {self.music_service.service_name} "
+                    "expired, is invalid or has not yet been completed: "
+                    f"[{exc.faultcode} / {exc.faultstring} / {exc.detail}]"
                 ) from exc
 
             if exc.faultcode and "Client.TokenRefreshRequired" in exc.faultcode:
@@ -241,7 +237,7 @@ class MusicServiceSoapClient:
                         # If we didn't find the tokens, raise
                         raise MusicServiceAuthException(
                             "Got a TokenRefreshRequired but no new token was"
-                            " found in the reply: {}".format(exc.detail)
+                            f" found in the reply: {exc.detail}"
                         ) from exc
 
                 # Create new token pair and save it
@@ -258,7 +254,7 @@ class MusicServiceSoapClient:
                     method=method,
                     parameters=[] if args is None else args,
                     http_headers=self.http_headers,
-                    soap_action="http://www.sonos.com/Services/1.1#{0}".format(method),
+                    soap_action=f"http://www.sonos.com/Services/1.1#{method}",
                     soap_header=self.get_soap_header(),
                     namespace=self.namespace,
                     timeout=self.timeout,
@@ -268,17 +264,14 @@ class MusicServiceSoapClient:
                 except (SoapFault, XML.ParseError) as refresh_exc:
                     # Refresh failed (eg account needs re-linking); fail cleanly
                     raise MusicServiceAuthException(
-                        "Token refresh for {} failed: [{} / {}]".format(
-                            self.music_service.service_name,
-                            getattr(refresh_exc, "faultcode", None),
-                            getattr(refresh_exc, "faultstring", refresh_exc),
-                        )
+                        f"Token refresh for {self.music_service.service_name} "
+                        f"failed: [{getattr(refresh_exc, 'faultcode', None)} / "
+                        f"{getattr(refresh_exc, 'faultstring', refresh_exc)}]"
                     ) from refresh_exc
                 except requests.exceptions.RequestException as refresh_exc:
                     raise MusicServiceException(
-                        "Error contacting {} while refreshing token: {}".format(
-                            self.music_service.service_name, refresh_exc
-                        )
+                        f"Error contacting {self.music_service.service_name} "
+                        f"while refreshing token: {refresh_exc}"
                     ) from refresh_exc
             else:
                 log.exception(
@@ -333,7 +326,7 @@ class MusicServiceSoapClient:
             return auth_parts["regUrl"], auth_parts["linkCode"], link_device_id
         raise MusicServiceAuthException(
             "begin_authentication() is not implemented "
-            "for auth type {}".format(self.music_service.auth_type)
+            f"for auth type {self.music_service.auth_type}"
         )
 
     def complete_authentication(self, link_code, link_device_id=None):
@@ -500,9 +493,7 @@ class MusicService:
         )
 
     def __repr__(self):
-        return "<{} '{}' at {}>".format(
-            self.__class__.__name__, self.service_name, hex(id(self))
-        )
+        return f"<{self.__class__.__name__} '{self.service_name}' at {hex(id(self))}>"
 
     def __str__(self):
         return self.__repr__()
@@ -629,7 +620,7 @@ class MusicService:
         for service in cls._get_music_services_data().values():
             if service_name == service["Name"]:
                 return service
-        raise MusicServiceException("Unknown music service: '%s'" % service_name)
+        raise MusicServiceException(f"Unknown music service: '{service_name}'")
 
     def _get_search_variants(self):
         """Fetch and parse the service search categories, keeping every variant.
@@ -816,7 +807,7 @@ class MusicService:
         # account.serial_numbers
         # account = self.account
 
-        result = "soco://{}?sid={}&sn={}".format(item_id, self.service_id, 0)
+        result = f"soco://{item_id}?sid={self.service_id}&sn={0}"
         return result
 
     @property
@@ -828,12 +819,10 @@ class MusicService:
         """
         if self.auth_type == "DeviceLink":
             # It used to be that the second part (after the second _ was the username
-            desc = "SA_RINCON{service_type}_X_#Svc{service_type}-0-Token".format(
-                service_type=self.service_type
-            )
+            desc = f"SA_RINCON{self.service_type}_X_#Svc{self.service_type}-0-Token"
         else:
             # This seems to at least be the case for TuneIn
-            desc = "SA_RINCON{service_type}_".format(service_type=self.service_type)
+            desc = f"SA_RINCON{self.service_type}_"
         return desc
 
     def begin_authentication(self):
@@ -996,8 +985,7 @@ class MusicService:
         search_variants = self._get_search_variants().get(category, None)
         if search_variants is None:
             raise MusicServiceException(
-                "%s does not support the '%s' search category"
-                % (self.service_name, category)
+                f"{self.service_name} does not support the '{category}' search category"
             )
 
         if variant is None:

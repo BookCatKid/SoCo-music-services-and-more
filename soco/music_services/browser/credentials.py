@@ -1,4 +1,4 @@
-'''Configured household music-service accounts and their decryption.'''
+"""Configured household music-service accounts and their decryption."""
 
 from __future__ import unicode_literals
 
@@ -16,7 +16,7 @@ from ... import discovery
 from ...exceptions import MusicServiceAuthException, MusicServiceException
 from ...xml import XML
 
-_ACCOUNT_SALT = bytes.fromhex('1a01a731c96e9ebde8475182b274b70e')
+_ACCOUNT_SALT = bytes.fromhex("1a01a731c96e9ebde8475182b274b70e")
 _LOG = logging.getLogger(__name__)
 
 
@@ -53,12 +53,10 @@ class ConfiguredMusicServiceAccount:
         self.schema_revision = int(schema_revision)
 
     def __repr__(self):
-        return "<{} service_id={} serial_number={} nickname={!r} at {}>".format(
-            self.__class__.__name__,
-            self.service_id,
-            self.serial_number,
-            self.nickname,
-            hex(id(self)),
+        return (
+            f"<{self.__class__.__name__} service_id={self.service_id} "
+            f"serial_number={self.serial_number} nickname={self.nickname!r} "
+            f"at {hex(id(self))}>"
         )
 
     @property
@@ -81,9 +79,7 @@ class ConfiguredMusicServiceAccount:
         match = re.search(r"X_#Svc\d+-([0-9a-fA-F]+)-Token$", self.udn)
         if not match:
             raise MusicServiceAuthException(
-                "Account UDN does not contain a numeric AccountUID: {}".format(
-                    self.udn
-                )
+                f"Account UDN does not contain a numeric AccountUID: {self.udn}"
             )
         return int(match.group(1), 16)
 
@@ -167,9 +163,7 @@ def _capture_account_event(device, timeout):
         event = subscription.events.get(timeout=timeout)
     except queue.Empty as error:
         raise MusicServiceException(
-            "No ThirdPartyMediaServersX event arrived within {} seconds".format(
-                timeout
-            )
+            f"No ThirdPartyMediaServersX event arrived within {timeout} seconds"
         ) from error
     finally:
         try:
@@ -333,7 +327,7 @@ def _encrypt_account_payload(plaintext, household_id):
 
 def _account_content_device_id(household_id, account):
     """Build the per-account identity used by native content sessions."""
-    return "{}_{:08x}".format(household_id, account.account_uid)
+    return f"{household_id}_{account.account_uid:08x}"
 
 
 def _local_time_zone():

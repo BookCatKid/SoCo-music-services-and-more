@@ -1,11 +1,11 @@
-'''Manifest and presentation-map data for configured music services.
+"""Manifest and presentation-map data for configured music services.
 
 Every music service advertises a JSON ``manifest`` (when it has one) through
 its descriptor, and most services describe their search, display and artwork
 rules in an XML presentation map.  This module parses both into usable
 structures.  The browser keeps the parsed results cached in memory, so the
 documents are only fetched once per :class:`MusicServiceBrowser` instance.
-'''
+"""
 
 from __future__ import unicode_literals
 
@@ -60,14 +60,14 @@ class PresentationMap:
         self.stream_quality_badges = dict(stream_quality_badges or {})
         self.now_playing_ratings = list(now_playing_ratings or [])
         self.quick_skips = {
-            skip_type: dict(entry)
-            for skip_type, entry in (quick_skips or {}).items()
+            skip_type: dict(entry) for skip_type, entry in (quick_skips or {}).items()
         }
         self.raw_xml = raw_xml
 
     def __repr__(self):
-        return "<{} uri={!r} version={} at {}>".format(
-            self.__class__.__name__, self.uri, self.version, hex(id(self))
+        return (
+            f"<{self.__class__.__name__} uri={self.uri!r} version="
+            f"{self.version} at {hex(id(self))}>"
         )
 
     def search_variants(self):
@@ -233,8 +233,7 @@ def _parse_search_categories(block):
                 entries.append(
                     {
                         "id": category.get("id", ""),
-                        "mapped_id": category.get("mappedId")
-                        or category.get("id", ""),
+                        "mapped_id": category.get("mappedId") or category.get("id", ""),
                         "custom": False,
                     }
                 )
@@ -299,9 +298,7 @@ def _parse_now_playing_ratings(block):
                         "id": rating.get("Id", ""),
                         "string_id": rating.get("StringId", ""),
                         "auto_skip": rating.get("AutoSkip", ""),
-                        "on_success_string_id": rating.get(
-                            "OnSuccessStringId", ""
-                        ),
+                        "on_success_string_id": rating.get("OnSuccessStringId", ""),
                         "type": rating.get("Type"),
                         "state": rating.get("State"),
                         "icons": icons,
@@ -321,8 +318,10 @@ def _parse_quick_skips(block):
         if not skip_type:
             continue
         entry = {}
-        for attr, key in (("forwardSeconds", "forward_seconds"),
-                          ("backwardSeconds", "backward_seconds")):
+        for attr, key in (
+            ("forwardSeconds", "forward_seconds"),
+            ("backwardSeconds", "backward_seconds"),
+        ):
             raw = skip.get(attr)
             if raw:
                 try:
@@ -373,21 +372,15 @@ def _fetch_presentation_map(music_service, session, manifest=None):
         entry = _as_mapping(manifest.get("presentationMap"))
         version = entry.get("version")
     try:
-        response = session.get(
-            uri, headers={"Accept": "application/xml"}, timeout=20
-        )
+        response = session.get(uri, headers={"Accept": "application/xml"}, timeout=20)
         response.raise_for_status()
     except requests.RequestException as error:
         raise MusicServiceException(
-            "{} presentation map request failed: {}".format(
-                music_service.service_name, error
-            )
+            f"{music_service.service_name} presentation map request failed: {error}"
         ) from error
     try:
         return parse_presentation_map(response.content, uri=uri, version=version)
     except XML.ParseError as error:
         raise MusicServiceException(
-            "{} presentation map was not valid XML".format(
-                music_service.service_name
-            )
+            f"{music_service.service_name} presentation map was not valid XML"
         ) from error

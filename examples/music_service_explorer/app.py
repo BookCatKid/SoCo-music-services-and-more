@@ -140,9 +140,7 @@ def _cached_accounts():
     if cached and now - cached[1] < ACCOUNTS_TTL:
         return cached[0]
     try:
-        accounts = ConfiguredMusicServiceAccount.get_accounts(
-            _device(), timeout=10
-        )
+        accounts = ConfiguredMusicServiceAccount.get_accounts(_device(), timeout=10)
     except Exception:  # pylint: disable=broad-except
         app.logger.warning(
             "Configured-account event capture failed; continuing without accounts",
@@ -212,6 +210,7 @@ def _get_browser(name, account=None):
 # Feature: legacy MusicService search categories/variants
 # ---------------------------------------------------------------------------
 
+
 def _search_categories(name):
     service = _get_service(name)
     return {
@@ -279,6 +278,7 @@ def _browser_search(name, category, term, variant, index, count, account=None):
 # ---------------------------------------------------------------------------
 # Feature: browse (get_metadata)
 # ---------------------------------------------------------------------------
+
 
 def _legacy_browse(
     name, item_id, index, count, recursive, sort_order=None, sort_ascending=None
@@ -357,6 +357,7 @@ def _browser_browse(
 # Feature: per-item metadata
 # ---------------------------------------------------------------------------
 
+
 def _legacy_media_metadata(name, item_id):
     service = _get_service(name)
     return {"metadata": service.get_media_metadata(item_id)}
@@ -402,6 +403,7 @@ def _browser_last_update(name, account=None):
 # Feature: misc read-only service calls
 # ---------------------------------------------------------------------------
 
+
 def _misc_service_info(name):
     service = _get_service(name)
     return {
@@ -423,6 +425,7 @@ def _misc_service_info(name):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @app.route("/")
 def index():
@@ -878,7 +881,7 @@ def api_onboard_manage():
                 data.get("key", ""),
             )
         else:
-            return jsonify({"error": "unknown action {!r}".format(action)}), 400
+            return jsonify({"error": f"unknown action {action!r}"}), 400
         _invalidate_caches()
         return jsonify({"ok": True, "action": action})
     except ValueError as error:

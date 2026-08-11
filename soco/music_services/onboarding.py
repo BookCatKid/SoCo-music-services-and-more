@@ -54,9 +54,9 @@ AUTH_OPERATIONS = {
     "AppLink": "AddOAuthAccountX",
 }
 
-#: The numeric AccountTier committed with AddOAuthAccountX. The player's
-#: field is ``ui4`` and rejects the provider's string tier (``free``/etc)
-#: with UPnP 402.
+#: The AccountTier committed with AddOAuthAccountX. The player stores a fixed
+#: 0/1 flag here (not the provider's free/premium/trial level), and the
+#: desktop controller's OAuth commit always sends "1", which we mirror.
 ACCOUNT_TIER = "1"
 
 #: Human-readable hints for the UPnP error codes the player embeds in
@@ -189,11 +189,9 @@ class AccountLink:
         }
 
     def __repr__(self):
-        return "<{} service_id={} source_action={!r} at {}>".format(
-            self.__class__.__name__,
-            self.service_id,
-            self.source_action,
-            hex(id(self)),
+        return (
+            f"<{self.__class__.__name__} service_id={self.service_id} "
+            f"source_action={self.source_action!r} at {hex(id(self))}>"
         )
 
 
@@ -222,8 +220,9 @@ class DeviceAuthCredential:
         self.nickname = nickname
 
     def __repr__(self):
-        return "<{} service credential package at {}>".format(
-            self.__class__.__name__, hex(id(self))
+        return (
+            f"<{self.__class__.__name__} service credential package "
+            f"at {hex(id(self))}>"
         )
 
 
@@ -247,11 +246,9 @@ class AddedAccount:
         self.provider_nickname = provider_nickname
 
     def __repr__(self):
-        return "<{} service_id={} account_udn={!r} at {}>".format(
-            self.__class__.__name__,
-            self.service_id,
-            self.account_udn,
-            hex(id(self)),
+        return (
+            f"<{self.__class__.__name__} service_id={self.service_id} "
+            f"account_udn={self.account_udn!r} at {hex(id(self))}>"
         )
 
 
@@ -285,9 +282,10 @@ class _SystemPropertiesFault(Exception):
                 or UPNP_ERROR_TEXT.get(self.upnp_code, "")
                 or "unspecified UPnP error"
             )
-            suffix = " (UPnP error {}: {})".format(self.upnp_code, meaning)
-        return "SystemProperties {} failed with HTTP {}{}".format(
-            self.action, self.http_status, suffix
+            suffix = f" (UPnP error {self.upnp_code}: {meaning})"
+        return (
+            f"SystemProperties {self.action} failed with HTTP "
+            f"{self.http_status}{suffix}"
         )
 
 
@@ -322,18 +320,16 @@ class _SystemPropertiesClient:
         payload = XML.tostring(envelope, encoding="utf-8")
         headers = {
             "Content-Type": 'text/xml; charset="utf-8"',
-            "SOAPACTION": '"{}#{}"'.format(SYSTEM_PROPERTIES_NS, action),
+            "SOAPACTION": f'"{SYSTEM_PROPERTIES_NS}#{action}"',
         }
-        url = "http://{}:1400{}".format(
-            self.device.ip_address, SYSTEM_PROPERTIES_CONTROL_URL
-        )
+        url = f"http://{self.device.ip_address}:1400{SYSTEM_PROPERTIES_CONTROL_URL}"
         try:
             response = self.session.post(
                 url, data=payload, headers=headers, timeout=timeout
             )
         except requests.RequestException as error:
             raise MusicServiceException(
-                "SystemProperties {} request failed: {}".format(action, error)
+                f"SystemProperties {action} request failed: {error}"
             ) from error
         if response.status_code != 200:
             raise self._fault_from_response(action, response)
@@ -413,9 +409,8 @@ class MusicServiceAccountManager:
         self.controller_id = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
-                "soco-music-service-account-manager:{}:{}".format(
-                    self.household_id, self.device_id
-                ),
+                f"soco-music-service-account-manager:"
+                f"{self.household_id}:{self.device_id}",
             )
         )
         self._sp = _SystemPropertiesClient(self.device, self.session)
@@ -459,9 +454,8 @@ class MusicServiceAccountManager:
         actual = self._live_household()
         if actual != expected_household:
             raise MusicServiceException(
-                "Target expects {}, but player {} belongs to {}".format(
-                    expected_household, self.device.ip_address, actual
-                )
+                f"Target expects {expected_household}, but player "
+                f"{self.device.ip_address} belongs to {actual}"
             )
         return actual
 
@@ -473,7 +467,7 @@ class MusicServiceAccountManager:
         prefix; the full ``SA_RINCON...`` UDN is rejected (UPnP 806). Passes
         the UDN through unchanged when the prefix does not match.
         """
-        prefix = "SA_RINCON{}_".format(account_type(service_id))
+        prefix = f"SA_RINCON{account_type(service_id)}_"
         return (
             account_udn[len(prefix) :]
             if account_udn.startswith(prefix)
@@ -507,9 +501,8 @@ class MusicServiceAccountManager:
         auth = self.music_service.auth_type
         if auth not in AUTH_OPERATIONS:
             raise MusicServiceException(
-                "{} uses unsupported authentication type {!r}".format(
-                    self.music_service.service_name, auth
-                )
+                f"{self.music_service.service_name} uses unsupported "
+                f"authentication type {auth!r}"
             )
         if auth == "Anonymous":
             return AccountLink(
@@ -525,9 +518,8 @@ class MusicServiceAccountManager:
             )
         if AUTH_OPERATIONS[auth] != "AddOAuthAccountX":
             raise MusicServiceException(
-                "{} uses credentials; call add_credentials instead".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} uses credentials; "
+                "call add_credentials instead"
             )
 
         callback = callback_path or self.callback_path
@@ -561,15 +553,14 @@ class MusicServiceAccountManager:
             # getDeviceLinkCode.
             if _app_link_only_stub(value) and auth != "DeviceLink":
                 raise MusicServiceException(
-                    "{} offers app-to-app linking only: getAppLink returned an "
-                    "encrypted app-link marker (appUrlEncrypt=true) with no "
-                    "browser URL or link code. Providers such as Apple Music "
-                    "restrict initial authorization to the Sonos mobile app "
-                    "(iOS/Android); even the official Sonos desktop app cannot "
-                    "add them. Link the account once from the Sonos phone app, "
-                    "then browse, manage, and rename it like any other account.".format(
-                        self.music_service.service_name
-                    )
+                    f"{self.music_service.service_name} offers app-to-app "
+                    "linking only: getAppLink returned an encrypted app-link "
+                    "marker (appUrlEncrypt=true) with no browser URL or link "
+                    "code. Providers such as Apple Music restrict initial "
+                    "authorization to the Sonos mobile app (iOS/Android); even "
+                    "the official Sonos desktop app cannot add them. Link the "
+                    "account once from the Sonos phone app, then browse, "
+                    "manage, and rename it like any other account."
                 )
             if session.standalone_supported or session.app_url or auth != "DeviceLink":
                 return session
@@ -577,14 +568,12 @@ class MusicServiceAccountManager:
         if auth != "DeviceLink":
             if app_link_error:
                 raise MusicServiceException(
-                    "{} getAppLink failed: {}".format(
-                        self.music_service.service_name, app_link_error
-                    )
+                    f"{self.music_service.service_name} getAppLink failed: "
+                    f"{app_link_error}"
                 ) from app_link_error
             raise MusicServiceException(
-                "{} returned no usable authorization path".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} returned no usable "
+                "authorization path"
             )
 
         try:
@@ -596,9 +585,8 @@ class MusicServiceAccountManager:
             )
         except (_BrowseSoapFault, MusicServiceException) as exc:
             raise MusicServiceException(
-                "{} supports neither getAppLink nor getDeviceLinkCode: {}".format(
-                    self.music_service.service_name, exc
-                )
+                f"{self.music_service.service_name} supports neither "
+                f"getAppLink nor getDeviceLinkCode: {exc}"
             ) from exc
         value = _result_value(root, "getDeviceLinkCodeResult")
         session = _link_from_result(
@@ -606,9 +594,8 @@ class MusicServiceAccountManager:
         )
         if not session.standalone_supported:
             raise MusicServiceException(
-                "{} returned no browser URL or link code".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} returned no browser URL "
+                "or link code"
             )
         return session
 
@@ -644,9 +631,7 @@ class MusicServiceAccountManager:
             )
         except _BrowseSoapFault as fault:
             raise MusicServiceException(
-                "{} getDeviceAuthToken failed: {}".format(
-                    self.music_service.service_name, fault
-                )
+                f"{self.music_service.service_name} getDeviceAuthToken failed: {fault}"
             ) from fault
         value = _result_value(root, "getDeviceAuthTokenResult")
         result = value if isinstance(value, dict) else {}
@@ -656,10 +641,9 @@ class MusicServiceAccountManager:
         key = str(result.get("privateKey", "") or "")
         if not token or not key:
             raise MusicServiceException(
-                "{} getDeviceAuthToken returned no authToken/privateKey pair; "
-                "the link code may have expired or already been exchanged.".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} getDeviceAuthToken returned "
+                "no authToken/privateKey pair; the link code may have expired "
+                "or already been exchanged."
             )
         return DeviceAuthCredential(
             auth_token=token,
@@ -720,16 +704,14 @@ class MusicServiceAccountManager:
             )
         if AUTH_OPERATIONS.get(self.music_service.auth_type) != "AddOAuthAccountX":
             raise MusicServiceException(
-                "{} does not use linked-account onboarding".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} does not use "
+                "linked-account onboarding"
             )
         if not link.link_code:
             raise MusicServiceException(
-                "{} did not provide a standalone link code; its app-only "
-                "authorization cannot be committed here".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} did not provide a "
+                "standalone link code; its app-only authorization cannot be "
+                "committed here"
             )
         household = self._require_household(link.household_id)
         credential = self.get_device_auth_token(link)
@@ -808,7 +790,7 @@ class MusicServiceAccountManager:
         service_id = int(self.music_service.service_id)
         if service_id <= 0:
             raise MusicServiceException(
-                "{} has no usable service ID".format(self.music_service.service_name)
+                f"{self.music_service.service_name} has no usable service ID"
             )
         if not account_udn:
             raise MusicServiceException(
@@ -869,17 +851,16 @@ class MusicServiceAccountManager:
         service_id = int(self.music_service.service_id)
         if auth not in ("Anonymous", "UserId", "UserIdPassword"):
             raise MusicServiceException(
-                "{} requires {}; use begin_link instead".format(
-                    self.music_service.service_name, auth
-                )
+                f"{self.music_service.service_name} requires {auth}; "
+                "use begin_link instead"
             )
         if auth in ("UserId", "UserIdPassword") and not username:
             raise MusicServiceException(
-                "{} requires a username".format(self.music_service.service_name)
+                f"{self.music_service.service_name} requires a username"
             )
         if auth == "UserIdPassword" and not password:
             raise MusicServiceException(
-                "{} requires a password".format(self.music_service.service_name)
+                f"{self.music_service.service_name} requires a password"
             )
         self._require_household(self.household_id)
         response = self._call_player(
@@ -940,14 +921,14 @@ class MusicServiceAccountManager:
         service_id = int(self.music_service.service_id)
         if service_id <= 0:
             raise MusicServiceException(
-                "{} has no usable service ID".format(self.music_service.service_name)
+                f"{self.music_service.service_name} has no usable service ID"
             )
         if not account_udn:
             raise MusicServiceException(
                 "An account UDN is required to remove an account"
             )
         self._require_household(self.household_id)
-        prefix = "SA_RINCON{}_".format(account_type(service_id))
+        prefix = f"SA_RINCON{account_type(service_id)}_"
         key = (
             account_udn[len(prefix) :]
             if account_udn.startswith(prefix)
@@ -980,18 +961,17 @@ class MusicServiceAccountManager:
         service_id = int(self.music_service.service_id)
         if service_id <= 0:
             raise MusicServiceException(
-                "{} has no usable service ID".format(self.music_service.service_name)
+                f"{self.music_service.service_name} has no usable service ID"
             )
         if self.music_service.auth_type != "UserIdPassword":
             raise MusicServiceException(
-                "{} uses {}; EditAccountPasswordX applies to UserIdPassword "
-                "services".format(
-                    self.music_service.service_name, self.music_service.auth_type
-                )
+                f"{self.music_service.service_name} uses "
+                f"{self.music_service.auth_type}; EditAccountPasswordX applies "
+                "to UserIdPassword services"
             )
         if not new_password:
             raise MusicServiceException(
-                "{} requires a new password".format(self.music_service.service_name)
+                f"{self.music_service.service_name} requires a new password"
             )
         if not account_udn:
             raise MusicServiceException("An account UDN is required to edit an account")
@@ -1019,7 +999,7 @@ class MusicServiceAccountManager:
         service_id = int(self.music_service.service_id)
         if service_id <= 0:
             raise MusicServiceException(
-                "{} has no usable service ID".format(self.music_service.service_name)
+                f"{self.music_service.service_name} has no usable service ID"
             )
         if not account_udn:
             raise MusicServiceException("An account UDN is required to edit an account")
@@ -1094,12 +1074,11 @@ class MusicServiceAccountManager:
                     }
                 )
                 return MusicServiceException(
-                    "{} is already linked to this household as {}. The player "
+                    f"{self.music_service.service_name} is already linked to "
+                    f"this household as {', '.join(map(str, names))}. The player "
                     "most likely rejected the duplicate commit (UPnP error "
                     "402: invalid arguments). Reauthorize the existing account "
-                    "in place (ReplaceAccountX) instead of adding a duplicate.".format(
-                        self.music_service.service_name, ", ".join(map(str, names))
-                    )
+                    "in place (ReplaceAccountX) instead of adding a duplicate."
                 )
         return None
 
@@ -1112,13 +1091,11 @@ class MusicServiceAccountManager:
                 or "unspecified UPnP error"
             )
             return MusicServiceException(
-                "The player rejected {} for the account (UPnP error {}: {}). "
-                "{}".format(action, fault.upnp_code, meaning, note)
+                f"The player rejected {action} for the account (UPnP error "
+                f"{fault.upnp_code}: {meaning}). {note}"
             )
         return MusicServiceException(
-            "The player rejected {} (HTTP {}): {}".format(
-                action, fault.http_status, fault.message
-            )
+            f"The player rejected {action} (HTTP {fault.http_status}): {fault.message}"
         )
 
 

@@ -122,10 +122,9 @@ def parse_response(service, response, search_type):
     else:
         # Some providers (eg PowerApp) reply without either key; fail cleanly.
         raise MusicServiceException(
-            '"response" should contain either the key '
-            '"searchResult" or "getMetadataResult": {}'.format(
-                sorted(response)[:10] if isinstance(response, dict) else response
-            )
+            '"response" should contain either the key "searchResult" or '
+            '"getMetadataResult": '
+            f"{sorted(response)[:10] if isinstance(response, dict) else response}"
         )
 
     # Form the search metadata
@@ -179,7 +178,7 @@ BOOL_STRS = {"true", "false"}
 def bool_str(string):
     """Returns a boolean from a string imput of 'true' or 'false'"""
     if string not in BOOL_STRS:
-        raise ValueError('Invalid boolean string: "{}"'.format(string))
+        raise ValueError(f'Invalid boolean string: "{string}"')
     return string == "true"
 
 
@@ -297,7 +296,7 @@ class MusicServiceItem(MetadataDictBase):
         # Form the item_id
         quoted_id = quote_url(content_dict["id"].encode("utf-8"))
         # The hex prefix remains a mistery for now
-        item_id = "0fffffff{}".format(quoted_id)
+        item_id = f"0fffffff{quoted_id}"
         # Form the uri
         is_track = cls == get_class("MediaMetadataTrack")
         uri = form_uri(item_id, music_service, is_track)

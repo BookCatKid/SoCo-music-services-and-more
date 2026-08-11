@@ -1,4 +1,4 @@
-'''Normalized browse models for configured music-service browsing.'''
+"""Normalized browse models for configured music-service browsing."""
 
 from __future__ import unicode_literals
 
@@ -37,8 +37,9 @@ class MusicServiceBrowseItem:
         self.raw = raw or {}
 
     def __repr__(self):
-        return "<{} {!r} ({}) at {}>".format(
-            self.__class__.__name__, self.title, self.item_id, hex(id(self))
+        return (
+            f"<{self.__class__.__name__} {self.title!r} "
+            f"({self.item_id}) at {hex(id(self))}>"
         )
 
     @property
@@ -70,20 +71,16 @@ class MusicServiceBrowseResult:
         self.raw = raw
 
     def __repr__(self):
-        return "<{} count={} total={} transport={!r} at {}>".format(
-            self.__class__.__name__,
-            self.count,
-            self.total,
-            self.transport,
-            hex(id(self)),
+        return (
+            f"<{self.__class__.__name__} count={self.count} "
+            f"total={self.total} transport={self.transport!r} "
+            f"at {hex(id(self))}>"
         )
 
 
 def _legacy_item(record, source_transport="smapi"):
     """Normalize one legacy SMAPI record."""
-    metadata = _as_mapping(
-        record.get("trackMetadata") or record.get("streamMetadata")
-    )
+    metadata = _as_mapping(record.get("trackMetadata") or record.get("streamMetadata"))
     artist = _as_string(metadata.get("artist", record.get("artist", "")))
     title = record.get("title") or record.get("name") or record.get("id", "")
     return MusicServiceBrowseItem(

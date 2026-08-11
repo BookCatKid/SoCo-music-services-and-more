@@ -95,9 +95,8 @@ class MusicServiceBrowser:
         self.account = account or self._single_configured_account()
         if self.account.service_id != int(self.music_service.service_id):
             raise MusicServiceException(
-                "Account belongs to service {}, not {}".format(
-                    self.account.service_id, self.music_service.service_id
-                )
+                f"Account belongs to service {self.account.service_id}, not "
+                f"{self.music_service.service_id}"
             )
 
         self.allow_credential_refresh = allow_credential_refresh
@@ -109,9 +108,8 @@ class MusicServiceBrowser:
         self.controller_id = str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
-                "soco-music-service-browser:{}:{}".format(
-                    self.device.household_id, self.device_id
-                ),
+                f"soco-music-service-browser:"
+                f"{self.device.household_id}:{self.device_id}",
             )
         )
         self._client = self._make_client(self.device.household_id)
@@ -130,9 +128,7 @@ class MusicServiceBrowser:
         # encrypted account event entirely so this companion API remains as
         # lightweight as the existing MusicService path for those providers.
         if self.music_service.auth_type == "Anonymous":
-            return ConfiguredMusicServiceAccount(
-                self.music_service.service_id, 0, ""
-            )
+            return ConfiguredMusicServiceAccount(self.music_service.service_id, 0, "")
 
         accounts = [
             account
@@ -141,16 +137,13 @@ class MusicServiceBrowser:
         ]
         if not accounts:
             raise MusicServiceAuthException(
-                "No configured {} account was found in this household".format(
-                    self.music_service.service_name
-                )
+                f"No configured {self.music_service.service_name} account "
+                "was found in this household"
             )
         if len(accounts) > 1:
             raise MusicServiceAuthException(
-                (
-                    "Multiple {} accounts are configured; "
-                    "pass an account explicitly"
-                ).format(self.music_service.service_name)
+                f"Multiple {self.music_service.service_name} accounts are "
+                "configured; pass an account explicitly"
             )
         return accounts[0]
 
@@ -323,17 +316,14 @@ class MusicServiceBrowser:
                 )
             except requests.RequestException as error:
                 raise MusicServiceException(
-                    "{} content browse failed: {}".format(
-                        self.music_service.service_name, error
-                    )
+                    f"{self.music_service.service_name} content browse failed: {error}"
                 ) from error
             if response.status_code != 401 or attempt == 1:
                 break
             if not self.allow_credential_refresh:
                 raise MusicServiceAuthException(
-                    "{} content browse returned HTTP 401".format(
-                        self.music_service.service_name
-                    )
+                    f"{self.music_service.service_name} content browse "
+                    "returned HTTP 401"
                 )
             self._client.refresh_auth_token()
             headers = _content_headers(
@@ -347,17 +337,15 @@ class MusicServiceBrowser:
 
         if response.status_code != 200:
             raise MusicServiceException(
-                "{} content browse returned HTTP {}".format(
-                    self.music_service.service_name, response.status_code
-                )
+                f"{self.music_service.service_name} content browse returned "
+                f"HTTP {response.status_code}"
             )
         try:
             page = response.json()
         except ValueError as error:
             raise MusicServiceException(
-                "{} content browse returned invalid JSON".format(
-                    self.music_service.service_name
-                )
+                f"{self.music_service.service_name} content browse returned "
+                "invalid JSON"
             ) from error
         if not isinstance(page, Mapping):
             raise MusicServiceException("Content browse root was not an object")
@@ -480,9 +468,7 @@ class MusicServiceBrowser:
         if force_scoped or self.account.udn:
             try:
                 return self._make_client(
-                    _account_content_device_id(
-                        self.device.household_id, self.account
-                    )
+                    _account_content_device_id(self.device.household_id, self.account)
                 )
             except MusicServiceAuthException:
                 # Not a token account (eg an anonymous service): no account
@@ -514,9 +500,8 @@ class MusicServiceBrowser:
                 sorted(self.music_service.available_search_categories)
             )
             raise MusicServiceException(
-                "Unknown search category {!r}; available categories: {}".format(
-                    category, categories
-                )
+                f"Unknown search category {category!r}; available "
+                f"categories: {categories}"
             )
         if variant != "all":
             variants = [entry for entry in variants if entry[0] == variant]
@@ -525,10 +510,8 @@ class MusicServiceBrowser:
                     category, []
                 )
                 raise MusicServiceException(
-                    "Unknown search variant {!r} for {!r}; "
-                    "available variants: {}".format(
-                        variant, category, ", ".join(sorted(available))
-                    )
+                    f"Unknown search variant {variant!r} for {category!r}; "
+                    f"available variants: {', '.join(sorted(available))}"
                 )
 
         client = self._scoped_client()
@@ -565,8 +548,9 @@ class MusicServiceBrowser:
     def sonos_uri_from_id(self, item_id):
         """Return a URI which can be sent to a player for playing."""
         encoded = quote_url(str(item_id).encode("utf-8"))
-        return "soco://{}?sid={}&sn={}".format(
-            encoded, self.music_service.service_id, self.account.serial_number
+        return (
+            f"soco://{encoded}?sid={self.music_service.service_id}"
+            f"&sn={self.account.serial_number}"
         )
 
     def get_extended_metadata(self, item):
