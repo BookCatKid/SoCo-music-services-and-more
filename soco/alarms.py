@@ -1,4 +1,8 @@
-"""This module contains classes relating to Sonos Alarms."""
+"""This module contains classes relating to Sonos Alarms.
+
+Alarm runtime actions (snooze, dismiss, running queries) and alarm events
+use the S2 AVTransport API and only work on S2 systems.
+"""
 
 import logging
 import re
@@ -315,6 +319,32 @@ class Alarms(_SocoSingletonBase):
             alarm = Alarm(zone=zone)
             alarm._alarm_id = props["AlarmID"]  # pylint: disable=protected-access
         return alarm
+
+    def subscribe(self, zone=None):
+        """Subscribe to alarm events from a zone.
+
+        Subscribes to the zone's AVTransport service, which reports
+        ``alarm_running`` and ``snooze_running`` changes, and to its
+        AlarmClock service, which reports ``alarm_list_version`` changes.
+        Events are delivered to each subscription's ``events`` queue, as
+        described in `soco.events`. The Alarms singleton is refreshed
+        automatically whenever the alarm list changes.
+
+        Args:
+            zone (`SoCo`, optional): The zone to subscribe to. Defaults to
+                the last zone used, or an arbitrary zone.
+
+        Returns:
+            list: The two `Subscription` instances (AVTransport first).
+                Unsubscribe with ``[sub.unsubscribe() for sub in subs]``.
+        """
+        if zone is None:
+            zone = self._last_zone_used or discovery.any_soco()
+        self._last_zone_used = zone
+        return [
+            zone.avTransport.subscribe(auto_renew=True),
+            zone.alarmClock.subscribe(auto_renew=True),
+        ]
 
 
 class Alarm:

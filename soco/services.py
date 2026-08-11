@@ -799,6 +799,22 @@ class AlarmClock(Service):
             }
         )
 
+    def _update_cache_on_event(self, event):
+        """Refresh the Alarms singleton when the alarm list changes.
+
+        Runs on the event thread (see `Service._update_cache_on_event`), so
+        a failure must not stop event delivery.
+        """
+        if "alarm_list_version" not in event.variables:
+            return
+        # Local import to avoid a circular import with soco.alarms.
+        from .alarms import Alarms
+
+        try:
+            Alarms().update(self.soco)
+        except Exception:  # pylint: disable=broad-except
+            log.exception("Failed to refresh alarms from event")
+
 
 class MusicServices(Service):
     """Sonos music services service, for functions related to 3rd party music

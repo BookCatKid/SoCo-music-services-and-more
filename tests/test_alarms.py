@@ -347,6 +347,52 @@ def test_get_running_alarm_none_when_idle(moco):
     assert Alarms().get_running_alarm(moco) is None
 
 
+def test_subscribe_returns_both_subscriptions(moco):
+    """subscribe() creates auto-renewing avTransport and AlarmClock subs."""
+    avt_sub = MagicMock()
+    clock_sub = MagicMock()
+    moco.avTransport.subscribe = MagicMock(return_value=avt_sub)
+    moco.alarmClock.subscribe = MagicMock(return_value=clock_sub)
+
+    subs = Alarms().subscribe(moco)
+
+    assert subs == [avt_sub, clock_sub]
+    moco.avTransport.subscribe.assert_called_once_with(auto_renew=True)
+    moco.alarmClock.subscribe.assert_called_once_with(auto_renew=True)
+
+
+def test_alarm_clock_event_refreshes_alarms(moco):
+    """An alarm_list_version event refreshes the Alarms singleton."""
+    from soco.events import Event
+
+    event = Event("sid", "1", moco.alarmClock, 0, {"alarm_list_version": "x:5"})
+    hook = moco.alarmClock._update_cache_on_event  # pylint: disable=protected-access
+    with patch.object(Alarms, "update") as update:
+        hook(event)
+    update.assert_called_once_with(moco)
+
+
+def test_alarm_clock_event_ignores_other_variables(moco):
+    """Non-list AlarmClock events do not refresh the singleton."""
+    from soco.events import Event
+
+    event = Event("sid", "1", moco.alarmClock, 0, {"time_zone": "x"})
+    hook = moco.alarmClock._update_cache_on_event  # pylint: disable=protected-access
+    with patch.object(Alarms, "update") as update:
+        hook(event)
+    update.assert_not_called()
+
+
+def test_alarm_clock_event_failure_is_logged(moco):
+    """A failed refresh must not raise (the hook runs on the event thread)."""
+    from soco.events import Event
+
+    event = Event("sid", "1", moco.alarmClock, 0, {"alarm_list_version": "x:5"})
+    hook = moco.alarmClock._update_cache_on_event  # pylint: disable=protected-access
+    with patch.object(Alarms, "update", side_effect=SoCoException("mismatch")):
+        hook(event)
+
+
 # --- Clock and time settings (AlarmClock service) ---
 
 
