@@ -8,13 +8,20 @@ For access to third party music streaming services, see the
 `music_service` module."""
 
 import logging
+from xml.sax.saxutils import escape
 
 from urllib.parse import quote as quote_url
 
 import xmltodict
 
 from . import discovery
-from .data_structures import SearchResult, DidlResource, DidlObject, DidlMusicAlbum
+from .data_structures import (
+    SearchResult,
+    DidlResource,
+    DidlObject,
+    DidlMusicAlbum,
+    to_didl_string,
+)
 from .data_structures_entry import from_didl_string
 from .exceptions import SoCoUPnPException
 from .utils import url_escape_path, really_unicode, camel_to_underscore
@@ -177,6 +184,94 @@ class MusicLibrary:
         """
         args = tuple(["radio_shows"] + list(args))
         return self.get_music_library_information(*args, **kwargs)
+
+    def add_uri_to_favorites(
+        self, uri, title, protocol_info="http-get:*:audio/mpeg:*"
+    ):
+        """Add a URI (typically a radio stream or audio file) to Sonos favorites.
+
+        The favorite is added to the ``FV:2`` Sonos favorites container and
+        appears in the official apps alongside favorites added there.
+
+        Args:
+            uri (str): The URI to favorite, e.g. ``'https://.../stream.mp3'``
+                or a music-service URI.
+            title (str): The title to show for the favorite.
+            protocol_info (str, optional): The UPnP protocol info describing
+                the stream. Defaults to ``http-get:*:audio/mpeg:*``.
+
+        Returns:
+            str: The object id of the new favorite (e.g. ``'FV:2/14'``),
+            suitable for :meth:`remove_from_favorites`.
+        """
+        didl = (
+            '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+            'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+            '<item id="" parentID="FV:2" restricted="true">'
+            f"<dc:title>{escape(title)}</dc:title>"
+            "<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>"
+            f'<res protocolInfo="{escape(protocol_info)}">{escape(uri)}</res>'
+            "</item></DIDL-Lite>"
+        )
+        response = self.contentDirectory.CreateObject(
+            [("ContainerID", "FV:2"), ("Elements", didl)]
+        )
+        return response["ObjectID"]
+
+    def add_item_to_favorites(self, item):
+        """Add a playable library item to Sonos favorites.
+
+        Args:
+            item (DidlObject): A playable item (one carrying a ``res`` URI),
+                for example from :meth:`get_music_library_information` or a
+                music-library search.
+
+        Returns:
+            str: The object id of the new favorite, suitable for
+            :meth:`remove_from_favorites`.
+        """
+        if not item.resources:
+            raise ValueError("The item must be playable (have a resource URI)")
+        response = self.contentDirectory.CreateObject(
+            [("ContainerID", "FV:2"), ("Elements", to_didl_string(item))]
+        )
+        return response["ObjectID"]
+
+    def remove_from_favorites(self, favorite_id):
+        """Remove a favorite from Sonos favorites by its object id.
+
+        Args:
+            favorite_id (str): The favorite's object id, e.g. ``'FV:2/14'``,
+                as returned by :meth:`add_uri_to_favorites`,
+                :meth:`add_item_to_favorites` or
+                :meth:`get_sonos_favorites`.
+        """
+        self.contentDirectory.DestroyObject([("ObjectID", favorite_id)])
+
+    def add_library_share(self, share_name):
+        """Add a music library share to the Sonos music library.
+
+        Args:
+            share_name (str): The share to add, of the form
+                ``'//hostname_or_IP/share_path'``.
+
+        Returns:
+            str: The object id of the new share.
+        """
+        didl = (
+            '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+            'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+            '<container id="" parentID="S:" restricted="true">'
+            f"<dc:title>{escape(share_name)}</dc:title>"
+            "<upnp:class>object.container.storageFolder</upnp:class>"
+            "</container></DIDL-Lite>"
+        )
+        response = self.contentDirectory.CreateObject(
+            [("ContainerID", "S:"), ("Elements", didl)]
+        )
+        return response["ObjectID"]
 
     def get_music_library_information(
         self,

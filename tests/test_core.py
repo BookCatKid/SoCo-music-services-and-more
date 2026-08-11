@@ -546,6 +546,251 @@ class TestSoco:
             [("InstanceID", 0), ("EQType", "SpeechEnhanceEnabled"), ("DesiredValue", 1)]
         )
 
+    def test_volume_db(self, moco):
+        moco.renderingControl.GetVolumeDB.return_value = {"CurrentVolume": "-12"}
+        assert moco.volume_db == -12
+        moco.renderingControl.GetVolumeDB.assert_called_once_with(
+            [("InstanceID", 0), ("Channel", "Master")]
+        )
+
+    def test_volume_db_set(self, moco):
+        moco.volume_db = -20
+        moco.renderingControl.SetVolumeDB.assert_called_once_with(
+            [("InstanceID", 0), ("Channel", "Master"), ("DesiredVolume", -20)]
+        )
+
+    def test_volume_db_unsupported(self, moco):
+        """volume_db returns None when the firmware rejects GetVolumeDB."""
+        moco.renderingControl.GetVolumeDB.side_effect = SoCoUPnPException(
+            "800", "800", "xml"
+        )
+        assert moco.volume_db is None
+        moco.renderingControl.GetVolumeDBRange.side_effect = SoCoUPnPException(
+            "800", "800", "xml"
+        )
+        assert moco.volume_db_range is None
+
+    def test_volume_db_range(self, moco):
+        moco.renderingControl.GetVolumeDBRange.return_value = {
+            "MinValue": "-32",
+            "MaxValue": "0",
+        }
+        assert moco.volume_db_range == (-32, 0)
+        moco.renderingControl.GetVolumeDBRange.assert_called_once_with(
+            [("InstanceID", 0), ("Channel", "Master")]
+        )
+
+    def test_reset_basic_eq(self, moco):
+        moco.reset_basic_eq()
+        moco.renderingControl.ResetBasicEQ.assert_called_once_with([("InstanceID", 0)])
+
+    def test_reset_ext_eq(self, moco):
+        moco.reset_ext_eq("SubGain")
+        moco.renderingControl.ResetExtEQ.assert_called_once_with(
+            [("InstanceID", 0), ("EQType", "SubGain")]
+        )
+
+    def test_headphone_connected(self, moco):
+        moco.renderingControl.GetHeadphoneConnected.return_value = {
+            "CurrentHeadphoneConnected": "1"
+        }
+        assert moco.headphone_connected is True
+        moco.renderingControl.GetHeadphoneConnected.return_value = {
+            "CurrentHeadphoneConnected": "0"
+        }
+        assert moco.headphone_connected is False
+
+    def test_headphone_connected_unsupported(self, moco):
+        """headphone_connected is None on devices without headphone output."""
+        moco.renderingControl.GetHeadphoneConnected.side_effect = SoCoUPnPException(
+            "not supported", "401", "xml"
+        )
+        assert moco.headphone_connected is None
+
+    def test_next_uri(self, moco):
+        moco.avTransport.GetMediaInfo.return_value = {"NextURI": "http://x/y.mp3"}
+        assert moco.next_uri == "http://x/y.mp3"
+        moco.avTransport.GetMediaInfo.return_value = {"NextURI": ""}
+        assert moco.next_uri == ""
+
+    def test_start_autoplay(self, moco):
+        moco.start_autoplay("http://x/autoplay.mp3", volume=80)
+        moco.avTransport.StartAutoplay.assert_called_once_with(
+            [
+                ("InstanceID", 0),
+                ("ProgramURI", "http://x/autoplay.mp3"),
+                ("ProgramMetaData", ""),
+                ("Volume", 80),
+                ("IncludeLinkedZones", 1),
+                ("ResetVolumeAfter", 1),
+            ]
+        )
+
+    def test_announce(self, moco):
+        """announce plays the uri and restores the previous state."""
+        with mock.patch("soco.core.Snapshot") as snap_cls:
+            snap = snap_cls.return_value
+            moco.get_current_transport_info = mock.MagicMock(
+                return_value={"current_transport_state": "STOPPED"}
+            )
+            moco.announce("http://x/tts.mp3", volume=50)
+            # the queue is untouched by an announcement, so it is not snapshotted
+            snap_cls.assert_called_once_with(moco)
+            snap.snapshot.assert_called_once_with()
+            moco.avTransport.SetAVTransportURI.assert_called_once()
+            snap.restore.assert_called_once_with(fade=False)
+
+    def test_announce_no_wait(self, moco):
+        """With wait=False announce does not snapshot or restore."""
+        with mock.patch("soco.core.Snapshot") as snap_cls:
+            moco.announce("http://x/tts.mp3", wait=False)
+            snap_cls.assert_not_called()
+
+    def test_remove_from_queue_range(self, moco):
+        moco.remove_from_queue_range(3, 2)
+        moco.avTransport.RemoveTrackRangeFromQueue.assert_called_once_with(
+            [
+                ("InstanceID", 0),
+                ("UpdateID", 0),
+                ("StartingIndex", 3),
+                ("NumberOfTracks", 2),
+            ]
+        )
+
+    def test_save_queue(self, moco):
+        moco.avTransport.SaveQueue.return_value = {"AssignedObjectID": "SQ:1"}
+        assert moco.save_queue("My Playlist") == "SQ:1"
+        moco.avTransport.SaveQueue.assert_called_once_with(
+            [("InstanceID", 0), ("Title", "My Playlist"), ("ObjectID", "")]
+        )
+
+    def test_backup_queue(self, moco):
+        moco.backup_queue()
+        moco.avTransport.BackupQueue.assert_called_once_with([("InstanceID", 0)])
+
+    def test_line_in_level(self, moco):
+        moco.audioIn = mock.MagicMock()
+        moco.audioIn.GetLineInLevel.return_value = {
+            "CurrentLeftLineInLevel": "60",
+            "CurrentRightLineInLevel": "60",
+        }
+        assert moco.line_in_level == (60, 60)
+
+    def test_set_line_in_level(self, moco):
+        moco.audioIn = mock.MagicMock()
+        moco.line_in_level = 75
+        moco.audioIn.SetLineInLevel.assert_called_once_with(
+            [
+                ("DesiredLeftLineInLevel", 75),
+                ("DesiredRightLineInLevel", 75),
+            ]
+        )
+
+    def test_audio_input_attributes(self, moco):
+        moco.audioIn = mock.MagicMock()
+        moco.audioIn.GetAudioInputAttributes.return_value = {
+            "CurrentName": "Line-In",
+            "CurrentIcon": "x-rincon-roomicon:linein",
+        }
+        assert moco.audio_input_attributes == {
+            "name": "Line-In",
+            "icon": "x-rincon-roomicon:linein",
+        }
+
+    def test_start_line_in_transmission(self, moco):
+        moco.audioIn = mock.MagicMock()
+        moco.start_line_in_transmission("RINCON_ABC")
+        moco.audioIn.StartTransmissionToGroup.assert_called_once_with(
+            [("ObjectID", ""), ("CoordinatorID", "RINCON_ABC")]
+        )
+
+    def test_stop_line_in_transmission(self, moco):
+        moco.audioIn = mock.MagicMock()
+        moco.stop_line_in_transmission("RINCON_ABC")
+        moco.audioIn.StopTransmissionToGroup.assert_called_once_with(
+            [("CoordinatorID", "RINCON_ABC")]
+        )
+
+    def test_get_protocol_info(self, moco):
+        with mock.patch("soco.core.MR_ConnectionManager") as cm_cls:
+            cm_cls.return_value.GetProtocolInfo.return_value = {
+                "Source": "http-get:*:audio/mpeg:*",
+                "Sink": "http-get:*:audio/mpeg:*",
+            }
+            source, sink = moco.get_protocol_info()
+            assert source == "http-get:*:audio/mpeg:*"
+            assert sink == "http-get:*:audio/mpeg:*"
+
+    def test_snooze_alarm(self, moco):
+        moco.snooze_alarm()
+        moco.avTransport.SnoozeAlarm.assert_called_once_with(
+            [("InstanceID", 0), ("Duration", 540)]
+        )
+
+    def test_snooze_alarm_custom_duration(self, moco):
+        moco.snooze_alarm(300)
+        moco.avTransport.SnoozeAlarm.assert_called_once_with(
+            [("InstanceID", 0), ("Duration", 300)]
+        )
+
+    def test_running_alarm(self, moco):
+        moco.avTransport.GetRunningAlarmProperties.return_value = {"AlarmID": "0"}
+        assert moco.running_alarm() is None
+        moco.avTransport.GetRunningAlarmProperties.return_value = {"AlarmID": "17"}
+        assert moco.running_alarm() == "17"
+
+    def test_running_alarm_none_when_no_alarm(self, moco):
+        """running_alarm is None when no alarm is ringing (error 800)."""
+        moco.avTransport.GetRunningAlarmProperties.side_effect = SoCoUPnPException(
+            "800", "800", "xml"
+        )
+        assert moco.running_alarm() is None
+
+    def test_running_alarm_reraises_other_errors(self, moco):
+        """Only error 800 means 'no alarm'; other faults propagate."""
+        moco.avTransport.GetRunningAlarmProperties.side_effect = SoCoUPnPException(
+            "701", "701", "xml"
+        )
+        with pytest.raises(SoCoUPnPException):
+            moco.running_alarm()
+
+    def test_add_uri_to_favorites(self, moco):
+        moco.add_uri_to_favorites("http://x/stream.mp3", "My Stream")
+        moco.contentDirectory.CreateObject.assert_called_once()
+        args = moco.contentDirectory.CreateObject.call_args[0][0]
+        assert ("ContainerID", "FV:2") in args
+
+    def test_add_item_to_favorites(self, moco):
+        from soco.data_structures import DidlMusicTrack, DidlResource
+
+        item = DidlMusicTrack(
+            title="Song",
+            parent_id="A:TRACKS",
+            item_id="A:TRACKS/1",
+            resources=[
+                DidlResource(
+                    uri="http://x/song.mp3",
+                    protocol_info="http-get:*:audio/mpeg:*",
+                )
+            ],
+        )
+        moco.add_item_to_favorites(item)
+        moco.contentDirectory.CreateObject.assert_called_once()
+        args = moco.contentDirectory.CreateObject.call_args[0][0]
+        assert ("ContainerID", "FV:2") in args
+
+    def test_remove_from_favorites(self, moco):
+        moco.remove_from_favorites("FV:2/14")
+        moco.contentDirectory.DestroyObject.assert_called_once_with(
+            [("ObjectID", "FV:2/14")]
+        )
+
+    def test_add_library_share(self, moco):
+        moco.add_library_share("//nas/music")
+        moco.contentDirectory.CreateObject.assert_called_once()
+        args = moco.contentDirectory.CreateObject.call_args[0][0]
+        assert ("ContainerID", "S:") in args
+
 
 class TestAVTransport:
     @pytest.mark.parametrize(
@@ -1568,7 +1813,8 @@ class TestDeviceProperties:
             moco.add_satellite_speakers(mock.Mock(), mock.Mock())
 
     def test_separate_satellite_speakers(self, moco):
-        """Test separate_satellite_speakers calls RemoveHTSatellite for each satellite."""
+        """Test separate_satellite_speakers calls RemoveHTSatellite for each
+        satellite."""
         moco._is_soundbar = True
         moco._uid = "RINCON_000XXX1400"
 
@@ -1596,7 +1842,8 @@ class TestDeviceProperties:
         assert called_uids == {"RINCON_SAT1_1400", "RINCON_SAT2_1400"}
 
     def test_separate_satellite_speakers_not_soundbar(self, moco):
-        """Test separate_satellite_speakers raises NotSupportedException on non-soundbars."""
+        """Test separate_satellite_speakers raises NotSupportedException on
+        non-soundbars."""
         moco._is_soundbar = False
         with pytest.raises(NotSupportedException):
             moco.separate_satellite_speakers()

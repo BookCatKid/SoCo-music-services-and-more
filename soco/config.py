@@ -65,6 +65,20 @@ See also:
     The :mod:`soco.events` and :mod:`soco.events_twisted` modules.
 """
 
+SERVICE_RETRY_ATTEMPTS = 3
+"""The number of times a UPnP action is retried after a transient network error.
+
+Only connection-level failures (timeouts, refused connections) are retried,
+with a short backoff between attempts. SOAP faults and HTTP error responses
+are never retried, because the action may already have been executed by the
+player. Set to 1 to disable retries.
+
+Note: a dropped reply after the player has executed a non-idempotent action
+(such as ``AddURIToQueue``) could cause that action to be sent twice. Keep
+this in mind when retrying mutating actions, and note that the worst-case
+request time is now ``SERVICE_RETRY_ATTEMPTS * REQUEST_TIMEOUT``.
+"""
+
 REQUEST_TIMEOUT = 20.0
 """The timeout (in seconds) to be used when sending commands to a Sonos device.
 

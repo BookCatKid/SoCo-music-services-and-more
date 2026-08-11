@@ -7,6 +7,7 @@ import datetime
 import logging
 import re
 import socket
+import time
 from functools import wraps
 import urllib.parse
 from xml.sax.saxutils import escape
@@ -18,6 +19,7 @@ import xmltodict
 import requests
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, ReadTimeout
+from requests.exceptions import ChunkedEncodingError
 
 from . import config
 from .data_structures import (
@@ -33,6 +35,7 @@ from .exceptions import (
     SoCoUPnPException,
     NotSupportedException,
     SoCoNotVisibleException,
+    UnknownSoCoException,
 )
 from .music_library import MusicLibrary
 from .services import (
@@ -46,7 +49,9 @@ from .services import (
     MusicServices,
     AudioIn,
     GroupRenderingControl,
+    MR_ConnectionManager,
 )
+from .snapshot import Snapshot
 from .utils import (
     camel_to_underscore,
     deprecated,
@@ -868,6 +873,56 @@ class SoCo(_SocoSingletonBase):
         self.avTransport.Stop([("InstanceID", 0), ("Speed", 1)])
 
     @only_on_master
+    def announce(
+        self, uri, title="", volume=None, wait=True, timeout=30, fade=False, **kwargs
+    ):
+        """Play an announcement, then restore whatever was playing before.
+
+        This is the Home-Assistant-style announce flow: the current playback
+        and volume are snapshotted, the announcement ``uri`` (typically a
+        short TTS clip) is played, and when it has finished the previous
+        state -- queue position, volume, EQ and play/pause state -- is
+        restored. Groups are left untouched.
+
+        Args:
+            uri (str): URI of the announcement clip to play.
+            title (str, optional): Title shown on the player while the
+                announcement plays.
+            volume (int, optional): Volume (0-100) to play the announcement
+                at. Defaults to the current volume.
+            wait (bool): Wait for the announcement to finish before
+                restoring. Defaults to `True`. When `False` the previous
+                state is not restored.
+            timeout (int): How long, in seconds, to wait for the
+                announcement to finish before restoring anyway.
+                Defaults to 30.
+            fade (bool): Whether volume should be faded up on restore.
+                Defaults to `False`.
+            kwargs: Additional arguments passed to :meth:`play_uri`.
+        """
+        if volume is not None:
+            volume = max(0, min(int(volume), 100))
+        # The queue is not touched by an announcement (play_uri replaces the
+        # transport URI), so only the playback/volume state is snapshotted.
+        snapshot = Snapshot(self) if wait else None
+        if snapshot is not None:
+            snapshot.snapshot()
+        try:
+            if volume is not None:
+                self.volume = volume
+            self.play_uri(uri, title=title, start=True, **kwargs)
+            if snapshot is not None:
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    transport = self.get_current_transport_info()
+                    if transport["current_transport_state"] == "STOPPED":
+                        break
+                    time.sleep(0.5)
+        finally:
+            if snapshot is not None:
+                snapshot.restore(fade=fade)
+
+    @only_on_master
     def end_direct_control_session(self):
         """Ends all third-party controlled streaming sessions."""
         self.avTransport.EndDirectControlSession([("InstanceID", 0)])
@@ -947,6 +1002,50 @@ class SoCo(_SocoSingletonBase):
         self.avTransport.Previous([("InstanceID", 0), ("Speed", 1)])
 
     @property
+    @only_on_master
+    def next_uri(self):
+        """str: The URI set to play after the current track, if any.
+
+        Read-only: current S2 firmware rejects the underlying
+        ``SetNextAVTransportURI`` action (UPnP 701). To queue something
+        after the current track, use :meth:`add_uri_to_queue` with
+        ``as_next=True``.
+        """
+        response = self.avTransport.GetMediaInfo([("InstanceID", 0)])
+        return response.get("NextURI", "")
+
+    @only_on_master
+    def start_autoplay(
+        self, uri, volume=100, include_linked_zones=True, reset_volume_after=True
+    ):
+        """Configure autoplay: the URI to start when the current session ends.
+
+        The player starts playing ``uri`` when the current playback session
+        ends (for example when a line-in source is disconnected or an alarm
+        finishes). This is the "Start playing something when this ends"
+        setting from the Sonos app.
+
+        Args:
+            uri (str): The URI to autoplay.
+            volume (int): Volume (0-100) to start autoplay at.
+                Defaults to 100.
+            include_linked_zones (bool): Whether linked zones should also
+                start playing. Defaults to `True`.
+            reset_volume_after (bool): Whether the volume should be restored
+                once autoplay starts. Defaults to `True`.
+        """
+        self.avTransport.StartAutoplay(
+            [
+                ("InstanceID", 0),
+                ("ProgramURI", uri),
+                ("ProgramMetaData", ""),
+                ("Volume", max(0, min(int(volume), 100))),
+                ("IncludeLinkedZones", int(include_linked_zones)),
+                ("ResetVolumeAfter", int(reset_volume_after)),
+            ]
+        )
+
+    @property
     def mute(self):
         """bool: The speaker's mute state.
 
@@ -991,6 +1090,81 @@ class SoCo(_SocoSingletonBase):
         self.renderingControl.SetVolume(
             [("InstanceID", 0), ("Channel", "Master"), ("DesiredVolume", volume)]
         )
+
+    @property
+    def volume_db(self):
+        """int: The current volume in decibels (dB).
+
+        Unlike :attr:`volume`, this is an absolute dB value; the available
+        range is given by :attr:`volume_db_range`.
+
+        Returns `None` on speakers whose firmware does not implement the
+        underlying ``GetVolumeDB`` action (observed on current S2
+        firmware, where the action is advertised but rejected).
+        """
+        try:
+            response = self.renderingControl.GetVolumeDB(
+                [("InstanceID", 0), ("Channel", "Master")]
+            )
+        except SoCoUPnPException:
+            return None
+        return int(response["CurrentVolume"])
+
+    @volume_db.setter
+    def volume_db(self, volume_db):
+        """Set the volume in decibels. See :attr:`volume_db_range`.
+
+        Raises `SoCoUPnPException` on speakers that do not implement
+        ``SetVolumeDB``.
+        """
+        self.renderingControl.SetVolumeDB(
+            [("InstanceID", 0), ("Channel", "Master"), ("DesiredVolume", volume_db)]
+        )
+
+    @property
+    def volume_db_range(self):
+        """tuple: The (minimum, maximum) volume in decibels.
+
+        Different devices have different ranges (e.g. ``(-32, 0)`` on most
+        speakers). Values from :attr:`volume_db` fall within this range.
+
+        Returns `None` on speakers that do not implement ``GetVolumeDBRange``.
+        """
+        try:
+            response = self.renderingControl.GetVolumeDBRange(
+                [("InstanceID", 0), ("Channel", "Master")]
+            )
+        except SoCoUPnPException:
+            return None
+        return int(response["MinValue"]), int(response["MaxValue"])
+
+    def reset_basic_eq(self):
+        """Reset bass, treble, loudness and balance to their defaults."""
+        self.renderingControl.ResetBasicEQ([("InstanceID", 0)])
+
+    def reset_ext_eq(self, eq_type):
+        """Reset an extended EQ setting to its default.
+
+        Args:
+            eq_type (str): The EQ to reset, e.g. ``'SubGain'``,
+                ``'SubCrossover'``, ``'SurroundLevel'`` or
+                ``'HeightChannelLevel'``.
+        """
+        self.renderingControl.ResetExtEQ([("InstanceID", 0), ("EQType", eq_type)])
+
+    @property
+    def headphone_connected(self):
+        """bool: Whether headphones are connected (Arc/Beam headphone mode).
+
+        Returns `None` on devices which do not support headphone output.
+        """
+        try:
+            response = self.renderingControl.GetHeadphoneConnected(
+                [("InstanceID", 0)]
+            )
+        except SoCoUPnPException:
+            return None
+        return response["CurrentHeadphoneConnected"] == "1"
 
     @property
     def bass(self):
@@ -1857,6 +2031,71 @@ class SoCo(_SocoSingletonBase):
         )
 
     @property
+    def line_in_level(self):
+        """tuple: The (left, right) line-in input level, each 0-100.
+
+        `None` on devices without a line-in (or whose firmware rejects
+        the request).
+        """
+        try:
+            response = self.audioIn.GetLineInLevel()
+        except (SoCoUPnPException, UnknownSoCoException, ChunkedEncodingError):
+            return None
+        return int(response["CurrentLeftLineInLevel"]), int(
+            response["CurrentRightLineInLevel"]
+        )
+
+    @line_in_level.setter
+    def line_in_level(self, level):
+        """Set the line-in input level (0-100) on both channels."""
+        level = max(0, min(int(level), 100))
+        self.audioIn.SetLineInLevel(
+            [
+                ("DesiredLeftLineInLevel", level),
+                ("DesiredRightLineInLevel", level),
+            ]
+        )
+
+    @property
+    def audio_input_attributes(self):
+        """dict: The line-in attributes, with keys ``'name'`` and ``'icon'``.
+
+        `None` on devices without a line-in (or whose firmware rejects
+        the request).
+        """
+        try:
+            response = self.audioIn.GetAudioInputAttributes()
+        except (SoCoUPnPException, UnknownSoCoException, ChunkedEncodingError):
+            return None
+        return {
+            "name": response["CurrentName"],
+            "icon": response["CurrentIcon"],
+        }
+
+    @only_on_master
+    def start_line_in_transmission(self, coordinator_id):
+        """Start transmitting this device's line-in to a group coordinator.
+
+        Args:
+            coordinator_id (str): The ``uid`` of the group coordinator to
+                transmit to, or ``'RINCON_AssociatedGroup'`` to follow the
+                device's current group.
+        """
+        self.audioIn.StartTransmissionToGroup(
+            [("ObjectID", ""), ("CoordinatorID", coordinator_id)]
+        )
+
+    @only_on_master
+    def stop_line_in_transmission(self, coordinator_id):
+        """Stop transmitting this device's line-in to a group coordinator.
+
+        Args:
+            coordinator_id (str): The ``uid`` of the group coordinator the
+                line-in is being transmitted to.
+        """
+        self.audioIn.StopTransmissionToGroup([("CoordinatorID", coordinator_id)])
+
+    @property
     def is_playing_radio(self):
         """bool: Is the speaker playing radio?"""
         return self.music_source == MUSIC_SRC_RADIO
@@ -1922,6 +2161,16 @@ class SoCo(_SocoSingletonBase):
                 ("CurrentURIMetaData", ""),
             ]
         )
+
+    def get_protocol_info(self):
+        """Return the protocols this renderer can source and sink.
+
+        Returns:
+            tuple: ``(source, sink)`` protocol info strings describing the
+            formats this device can play, e.g. ``'http-get:*:audio/mpeg:*'``.
+        """
+        response = MR_ConnectionManager(self).GetProtocolInfo()
+        return response["Source"], response["Sink"]
 
     @property
     def status_light(self):
@@ -2448,6 +2697,24 @@ class SoCo(_SocoSingletonBase):
         )
 
     @only_on_master
+    def remove_from_queue_range(self, start_index, count):
+        """Remove a range of tracks from the queue.
+
+        Args:
+            start_index (int): The (0-based) index of the first track to
+                remove.
+            count (int): The number of tracks to remove.
+        """
+        self.avTransport.RemoveTrackRangeFromQueue(
+            [
+                ("InstanceID", 0),
+                ("UpdateID", 0),
+                ("StartingIndex", start_index),
+                ("NumberOfTracks", count),
+            ]
+        )
+
+    @only_on_master
     def clear_queue(self):
         """Remove all tracks from the queue."""
         self.avTransport.RemoveAllTracksFromQueue(
@@ -2455,6 +2722,32 @@ class SoCo(_SocoSingletonBase):
                 ("InstanceID", 0),
             ]
         )
+
+    @only_on_master
+    def save_queue(self, title=""):
+        """Save the current queue as a Sonos playlist.
+
+        Args:
+            title (str, optional): The title for the saved playlist.
+                If empty, the player picks a default (usually the name of
+                the currently playing track).
+
+        Returns:
+            str: The object id of the saved playlist (e.g. ``'SQ:…'``).
+        """
+        response = self.avTransport.SaveQueue(
+            [("InstanceID", 0), ("Title", title), ("ObjectID", "")]
+        )
+        return response["AssignedObjectID"]
+
+    @only_on_master
+    def backup_queue(self):
+        """Back up the current queue.
+
+        The player stores a backup of the queue which can be restored
+        from the official app. Requires a ``Sonos`` brand player.
+        """
+        self.avTransport.BackupQueue([("InstanceID", 0)])
 
     @deprecated("0.13", "soco.music_library.get_favorite_radio_shows", "0.15", True)
     def get_favorite_radio_shows(self, start=0, max_items=100):
@@ -2503,6 +2796,45 @@ class SoCo(_SocoSingletonBase):
         )
         warnings.warn(message, stacklevel=2)
         return self.__get_favorites(SONOS_FAVORITES, start, max_items)
+
+    def add_uri_to_favorites(
+        self, uri, title, protocol_info="http-get:*:audio/mpeg:*"
+    ):
+        """Add a URI (typically a radio stream) to Sonos favorites.
+
+        See :meth:`MusicLibrary.add_uri_to_favorites` for details.
+
+        Returns:
+            str: The new favorite's object id.
+        """
+        return self.music_library.add_uri_to_favorites(uri, title, protocol_info)
+
+    def add_item_to_favorites(self, item):
+        """Add a playable library item to Sonos favorites.
+
+        See :meth:`MusicLibrary.add_item_to_favorites` for details.
+
+        Returns:
+            str: The new favorite's object id.
+        """
+        return self.music_library.add_item_to_favorites(item)
+
+    def remove_from_favorites(self, favorite_id):
+        """Remove a favorite from Sonos favorites by its object id.
+
+        See :meth:`MusicLibrary.remove_from_favorites`.
+        """
+        self.music_library.remove_from_favorites(favorite_id)
+
+    def add_library_share(self, share_name):
+        """Add a music library share.
+
+        See :meth:`MusicLibrary.add_library_share` for details.
+
+        Returns:
+            str: The new share's object id.
+        """
+        return self.music_library.add_library_share(share_name)
 
     def __get_favorites(self, favorite_type, start=0, max_items=100):
         """Helper method for `get_favorite_radio_*` methods.
@@ -2723,6 +3055,41 @@ class SoCo(_SocoSingletonBase):
             return int(times[0]) * 3600 + int(times[1]) * 60 + int(times[2])
         else:
             return None
+
+    @only_on_master
+    def snooze_alarm(self, duration=540):
+        """Snooze the currently running alarm.
+
+        Args:
+            duration (int): Snooze duration in seconds. Defaults to 540
+                (9 minutes), matching the Sonos app.
+        """
+        self.avTransport.SnoozeAlarm([("InstanceID", 0), ("Duration", duration)])
+
+    @only_on_master
+    def running_alarm(self):
+        """The alarm currently running on this player, if any.
+
+        Returns:
+            str or None: The alarm's id (as used by
+            :class:`soco.alarms.Alarm`), or `None` if no alarm is running.
+
+        The player replies with UPnP error 800 when no alarm is currently
+        ringing, which is treated as "no alarm running". Other errors are
+        re-raised.
+        """
+        try:
+            response = self.avTransport.GetRunningAlarmProperties(
+                [("InstanceID", 0)]
+            )
+        except SoCoUPnPException as error:
+            if error.error_code == "800":
+                return None
+            raise
+        alarm_id = response.get("AlarmID", "")
+        if not alarm_id or alarm_id in ("0", "0.0"):
+            return None
+        return alarm_id
 
     @only_on_master
     def reorder_sonos_playlist(self, sonos_playlist, tracks, new_pos, update_id=0):

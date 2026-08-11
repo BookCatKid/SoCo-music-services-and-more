@@ -368,4 +368,70 @@ def test_handle_upnp_error_with_empty_response(service):
         service.handle_upnp_error(DUMMY_ERROR_EMPTY_RESPONSE)
 
 
+def test_send_command_retries_transient_network_error(service, monkeypatch):
+    """Connection-level failures are retried and the call eventually succeeds."""
+    monkeypatch.setattr("soco.services.config.SERVICE_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr("soco.services.time.sleep", lambda _: None)
+
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+
+    response = mock.MagicMock()
+    response.headers = {}
+    response.status_code = 200
+    response.text = DUMMY_VALID_RESPONSE
+
+    errors = [RequestsConnectionError("boom"), RequestsConnectionError("boom")]
+    with mock.patch("requests.post", side_effect=errors + [response]) as fake_post:
+        result = service.send_command("SetAVTransportURI", [], cache_timeout=2)
+
+    assert fake_post.call_count == 3
+    assert result == {"CurrentLEDState": "On", "Unicode": "μИⅠℂ☺ΔЄ💋"}
+
+
+def test_send_command_raises_after_retries_exhausted(service, monkeypatch):
+    """The last connection-level error is raised after retries are exhausted."""
+    monkeypatch.setattr("soco.services.config.SERVICE_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr("soco.services.time.sleep", lambda _: None)
+
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+
+    error = RequestsConnectionError("boom")
+    with mock.patch("requests.post", side_effect=error) as fake_post:
+        with pytest.raises(RequestsConnectionError):
+            service.send_command("SetAVTransportURI", [], cache_timeout=2)
+
+    assert fake_post.call_count == 3
+
+
+def test_send_command_does_not_retry_http_errors(service, monkeypatch):
+    """HTTP error responses are not retried: the action was received."""
+    monkeypatch.setattr("soco.services.config.SERVICE_RETRY_ATTEMPTS", 5)
+
+    response = mock.MagicMock()
+    response.headers = {}
+    response.status_code = 500
+    response.text = DUMMY_ERROR
+
+    with mock.patch("requests.post", return_value=response) as fake_post:
+        with pytest.raises(SoCoUPnPException):
+            service.send_command("SetAVTransportURI", [], cache_timeout=2)
+
+    assert fake_post.call_count == 1
+
+
+def test_send_command_retries_disabled_with_single_attempt(service, monkeypatch):
+    """SERVICE_RETRY_ATTEMPTS=1 disables retries entirely."""
+    monkeypatch.setattr("soco.services.config.SERVICE_RETRY_ATTEMPTS", 1)
+    monkeypatch.setattr("soco.services.time.sleep", lambda _: None)
+
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+
+    error = RequestsConnectionError("boom")
+    with mock.patch("requests.post", side_effect=error) as fake_post:
+        with pytest.raises(RequestsConnectionError):
+            service.send_command("SetAVTransportURI", [], cache_timeout=2)
+
+    assert fake_post.call_count == 1
+
+
 # TODO: test iter_actions

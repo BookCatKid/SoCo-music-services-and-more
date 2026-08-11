@@ -33,11 +33,14 @@ Argument(name='CurrentDateFormat', vartype='string')] ...
 
 
 import logging
+import time
 from collections import namedtuple
 from xml.sax.saxutils import escape
 
 import xml.etree.ElementTree as ET
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import Timeout
 
 from .cache import Cache
 from . import events
@@ -487,13 +490,31 @@ class Service:
         headers, body = self.build_command(action, args)
         log.debug("Sending %s %s to %s", action, args, self.soco.ip_address)
         log.debug("Sending %s, %s", headers, prettify(body))
-        # Convert the body to bytes, and send it.
-        response = requests.post(
-            self.base_url + self.control_url,
-            headers=headers,
-            data=body.encode("utf-8"),
-            timeout=timeout,
-        )
+        # Convert the body to bytes, and send it. Transient connection-level
+        # failures (timeouts, refused connections, dropped replies) are
+        # retried with a short backoff, because the player may never have
+        # received the request. HTTP error responses and SOAP faults are not
+        # retried: those mean the player did receive and process the action.
+        attempts = max(1, int(config.SERVICE_RETRY_ATTEMPTS))
+        for attempt in range(attempts):
+            try:
+                response = requests.post(
+                    self.base_url + self.control_url,
+                    headers=headers,
+                    data=body.encode("utf-8"),
+                    timeout=timeout,
+                )
+                break
+            except (RequestsConnectionError, Timeout) as error:
+                if attempt == attempts - 1:
+                    raise
+                log.warning(
+                    "Transient network error sending %s to %s, retrying: %s",
+                    action,
+                    self.soco.ip_address,
+                    error,
+                )
+                time.sleep(0.5 * (attempt + 1))
 
         log.debug("Received %s, %s", response.headers, response.text)
         status = response.status_code
@@ -874,6 +895,7 @@ class MS_ConnectionManager(Service):  # pylint: disable=invalid-name
     def __init__(self, soco):
         super().__init__(soco)
         self.service_type = "ConnectionManager"
+        self.scpd_url = "/xml/ConnectionManager1.xml"
         self.control_url = "/MediaServer/ConnectionManager/Control"
         self.event_subscription_url = "/MediaServer/ConnectionManager/Event"
 
@@ -895,6 +917,7 @@ class MR_ConnectionManager(Service):  # pylint: disable=invalid-name
     def __init__(self, soco):
         super().__init__(soco)
         self.service_type = "ConnectionManager"
+        self.scpd_url = "/xml/ConnectionManager1.xml"
         self.control_url = "/MediaRenderer/ConnectionManager/Control"
         self.event_subscription_url = "/MediaRenderer/ConnectionManager/Event"
 

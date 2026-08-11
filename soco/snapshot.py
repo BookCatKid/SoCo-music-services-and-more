@@ -18,6 +18,10 @@ Warning:
     one use.
 """
 
+import logging
+
+_LOG = logging.getLogger(__name__)
+
 
 class Snapshot:
     """A snapshot of the current state.
@@ -296,6 +300,99 @@ class Snapshot:
     def __enter__(self):
         self.snapshot()
         return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.restore()
+
+
+class GroupSnapshot:
+    """A snapshot of the playback state of an entire household of zones.
+
+    Like :class:`Snapshot`, but for every zone in the household at once,
+    including which zones were grouped together. Useful for temporarily
+    switching every speaker to an announcement or a party playlist and then
+    restoring exactly what was playing, at what volume, and in which groups.
+
+    Warning:
+        Like :class:`Snapshot`, this class is designed to be created, used
+        and destroyed in one go, not reused or long lived.
+
+    Note:
+        Stereo-pair and home-theater bonded zones (subwoofer, satellites)
+        are restored through their master; the bonding itself is left
+        untouched. Cloud queues (started by Alexa) cannot be restarted and
+        are skipped, as with :class:`Snapshot`.
+    """
+
+    def __init__(self, soco, snapshot_queue=False):
+        """
+        Args:
+            soco (SoCo): Any speaker in the household to be snapshotted.
+            snapshot_queue (bool): Whether each zone's queue should be
+                snapshotted too. Defaults to `False`.
+
+        Warning:
+            It is strongly advised that you do not snapshot the queues unless
+            you really need to, as restoring large queues is done one track
+            at a time.
+        """
+        self.soco = soco
+        self.snapshot_queue = snapshot_queue
+        #: (coordinator, member list) per group with more than one member
+        self._groups = []
+        #: zone -> Snapshot
+        self._snapshots = {}
+
+    def snapshot(self):
+        """Record the grouping and per-zone state of the household.
+
+        Returns:
+            GroupSnapshot: self, so the call can be chained.
+        """
+        self.soco.zone_group_state.poll(self.soco)
+        self._groups = [
+            (group.coordinator, list(group.members))
+            for group in self.soco.zone_group_state.groups.values()
+            if len(group.members) > 1
+        ]
+        self._snapshots = {
+            zone: Snapshot(zone, snapshot_queue=self.snapshot_queue)
+            for zone in self.soco.visible_zones
+        }
+        for snapshot in self._snapshots.values():
+            snapshot.snapshot()
+        return self
+
+    def restore(self, fade=False):
+        """Restore the household grouping, then each zone's playback state.
+
+        Groups are re-formed first (members re-join their previous
+        coordinator) so that each coordinator's queue and transport state
+        is then restored to the group as a whole. Slave-zone snapshots only
+        restore volume, as with :class:`Snapshot`.
+
+        Args:
+            fade (bool): Whether volume should be faded up on restore.
+        """
+        for coordinator, members in self._groups:
+            for member in members:
+                if member is coordinator:
+                    continue
+                try:
+                    member.join(coordinator)
+                except Exception as error:  # noqa: BLE001
+                    _LOG.warning(
+                        "Could not restore %s to group of %s: %s",
+                        member,
+                        coordinator,
+                        error,
+                    )
+        self.soco.zone_group_state.clear_cache()
+        for snapshot in self._snapshots.values():
+            snapshot.restore(fade=fade)
+
+    def __enter__(self):
+        return self.snapshot()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.restore()
