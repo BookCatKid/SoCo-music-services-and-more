@@ -719,13 +719,10 @@ def _onboard_status(name):
 def _guard_cross_site_mutations():
     """Block cross-site requests to the mutating endpoints.
 
-    The onboarding mutations are plain JSON POSTs with no session or auth, so
-    a cross-origin ``fetch`` with a ``text/plain`` body could otherwise
-    trigger them without a CORS preflight (the browser allows such requests,
-    it only hides the response). Requiring a custom header -- which a
-    cross-origin request cannot add without triggering a preflight -- and
-    rejecting foreign ``Origin`` headers closes that hole while keeping the
-    endpoints usable by the app itself and by local tooling.
+    The mutations are plain JSON POSTs with no auth, so a cross-origin fetch
+    could trigger them without a CORS preflight. Requiring a custom header
+    (which cross-origin requests cannot add without a preflight) and
+    rejecting foreign Origins closes that hole.
     """
     if request.method != "POST":
         return None

@@ -23,11 +23,9 @@ _LOG = logging.getLogger(__name__)
 class ConfiguredMusicServiceAccount:
     """Credentials for one music-service account already stored by Sonos.
 
-    Instances are read from ``ThirdPartyMediaServersX``. They are intentionally
-    separate from :class:`soco.music_services.accounts.Account`: the existing
-    class models the legacy ``/status/accounts`` response, while this class
-    represents the newer encrypted account record used by the desktop browse
-    path. Keeping the models separate avoids changing existing SoCo behavior.
+    Read from ``ThirdPartyMediaServersX``; intentionally separate from
+    :class:`soco.music_services.accounts.Account` (the legacy
+    ``/status/accounts`` model).
     """
 
     def __init__(
@@ -67,10 +65,8 @@ class ConfiguredMusicServiceAccount:
     def keyless(self):
         """bool: True for empty-key records (no username, token, or key).
 
-        Such records are stored by the player with an unmanaged
-        ``SA_RINCON<type>_`` UDN: RemoveAccount and SetAccountNicknameX
-        reject them (observed UPnP errors 806 and 402), so management actions
-        should be withheld for them.
+        Such records are stored with a truncated ``SA_RINCON<type>_`` UDN
+        and removed with the empty-key RemoveAccount contract.
         """
         return not self.username and not self.token and not self.key
 
@@ -229,10 +225,7 @@ def _decrypt_account_payload(encoded, household_id):
 def _aes_128_cbc_decrypt(ciphertext, key, iv):
     """Decrypt the Sonos account envelope without adding a hard dependency.
 
-    ``cryptography`` is preferred when the caller already has it installed. It
-    cannot be made an unconditional SoCo dependency without dropping some of
-    SoCo's currently supported Python versions, so OpenSSL remains a fallback.
-    The fallback mirrors the working desktop-browser research implementation.
+    ``cryptography`` is preferred when installed; OpenSSL is the fallback.
     """
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -281,11 +274,9 @@ def _aes_128_cbc_decrypt(ciphertext, key, iv):
 def _aes_128_cbc_encrypt(plaintext, key, iv):
     """Encrypt a value for the Sonos account envelope without a hard dependency.
 
-    ``cryptography`` is preferred when the caller already has it installed.
-    It cannot be made an unconditional SoCo dependency without dropping some
-    of SoCo's currently supported Python versions, so OpenSSL remains a
-    fallback. PKCS#7 padding is applied explicitly because the decrypt side
-    validates (rather than removes) padding.
+    ``cryptography`` is preferred when installed; OpenSSL is the fallback.
+    PKCS#7 padding is applied explicitly because the decrypt side validates
+    (rather than removes) padding.
     """
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes

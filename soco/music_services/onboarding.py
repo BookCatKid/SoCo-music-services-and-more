@@ -1,26 +1,20 @@
 """Add, link, rename, and remove music-service accounts in a household.
 
-The read side of configured accounts (:class:`soco.music_services.browser.
-credentials.ConfiguredMusicServiceAccount`) and the browse flow
-(:class:`soco.music_services.browser.MusicServiceBrowser`) intentionally never
-mutate the household. This module implements the write side: provisioning new
-accounts (OAuth links and legacy credentials), re-linking existing ones, and
-managing their stored records on the player.
+This is the write side of configured accounts: the browse flow
+(:class:`soco.music_services.browser.MusicServiceBrowser`) never mutates the
+household, while this module provisions new accounts (OAuth links and legacy
+credentials), re-links existing ones, and manages their stored records.
 
-Two distinct transports are involved:
+Two transports are used: provider calls (``getAppLink``,
+``getDeviceAuthToken``, ...) go through the desktop-controller SMAPI flow,
+and player mutations go through the local ``SystemProperties`` UPnP service
+with account values wrapped in the household ``2:`` envelope (plaintext is
+rejected with UPnP 402).
 
-* Provider calls (``getAppLink``, ``getDeviceLinkCode``,
-  ``getDeviceAuthToken``) go through the desktop-controller SMAPI flow, the
-  same one used by :class:`soco.music_services.browser.MusicServiceBrowser`.
-* Player mutations go through the local ``SystemProperties`` UPnP service.
-  Account values are wrapped in the household ``2:`` envelope (see
-  :func:`soco.music_services.browser.credentials._encrypt_account_payload`);
-  plaintext values are rejected by the player with UPnP error 402.
-
-The link flow deliberately separates authorization from mutation: an
-:class:`AccountLink` can be inspected and opened without changing the
-household, and the caller must explicitly call :meth:`MusicServiceAccountManager.
-commit_link` to install the resulting credentials.
+The link flow separates authorization from mutation: an :class:`AccountLink`
+can be inspected and opened without changing the household, and the caller
+must explicitly call :meth:`MusicServiceAccountManager.commit_link` to
+install the resulting credentials.
 """
 
 from __future__ import unicode_literals
@@ -60,20 +54,13 @@ AUTH_OPERATIONS = {
     "AppLink": "AddOAuthAccountX",
 }
 
-#: The AccountTier committed with AddOAuthAccountX. The player's field is
-#: numeric (SCPD type ``ui4``); the provider's userInfo.accountTier string
-#: (``free``/``premium``/``trial``) is rejected with UPnP 402. Decompiled from
-#: the desktop controller: the wrapped-credentials flow passes a caller byte
-#: through verbatim (the captured Windows commit sent ``1``), the local
-#: auth-code flow hardcodes ``0``, and ReplaceAccountX carries no tier field.
-#: Every path is a per-flow constant -- never the provider subscription level.
+#: The numeric AccountTier committed with AddOAuthAccountX. The player's
+#: field is ``ui4`` and rejects the provider's string tier (``free``/etc)
+#: with UPnP 402.
 ACCOUNT_TIER = "1"
 
-#: Human-readable hints for the numeric UPnP error codes the player embeds in
-#: SystemProperties fault details (``<UPnPError><errorCode>``). Codes 800 and
-#: 806 were observed against a live player (legacy-action rejection and unknown
-#: account respectively); the rest are the standard UPnP Device Architecture
-#: codes. Codes not listed here fall back to the player-supplied
+#: Human-readable hints for the UPnP error codes the player embeds in
+#: SystemProperties faults. Codes not listed fall back to the player's own
 #: errorDescription.
 UPNP_ERROR_TEXT = {
     402: "invalid arguments",
@@ -183,11 +170,8 @@ class AccountLink:
     def redacted_dict(self):
         """Return a JSON-able dict with secrets replaced by ``<redacted>``.
 
-        The link code and link device id are never printed or logged by SoCo;
-        this helper keeps them out of caller-facing dictionaries too. Note
-        that some providers embed the link code in the registration URL query
-        (eg Spotify's ``?linkCode=...``), so :attr:`registration_url` is kept
-        for opening but is not itself secret-free.
+        The registration URL is kept for opening (some providers embed the
+        link code in its query), so it is not itself secret-free.
         """
         return {
             "service_id": self.service_id,
@@ -221,11 +205,8 @@ class DeviceAuthCredential:
     The player does NOT exchange the link code; it receives this result.
 
     Note:
-        The provider's userInfo.accountTier string (``free``/``premium``/
-        ``trial``) is deliberately NOT carried here -- the player's AccountTier
-        field is numeric and rejects the string with UPnP 402. The player
-        stores a per-record flag (``0``/``1``), not the provider subscription
-        level; see :data:`ACCOUNT_TIER`.
+        The provider's accountTier string is not carried: the player's field
+        is numeric; see :data:`ACCOUNT_TIER`.
     """
 
     def __init__(self, auth_token, private_key, user_id_hash_code="", nickname=""):
@@ -383,10 +364,9 @@ class _SystemPropertiesClient:
 class MusicServiceAccountManager:
     """Provision and manage one music service's accounts in a household.
 
-    The link flow performs no player mutation until
-    :meth:`commit_link` is called: :meth:`begin_link` only asks the provider
-    for its authorization choices. Legacy credential services are added
-    directly with :meth:`add_credentials`.
+    The link flow performs no player mutation until :meth:`commit_link` is
+    called; legacy credential services are added directly with
+    :meth:`add_credentials`.
 
     Typical use::
 
@@ -396,13 +376,9 @@ class MusicServiceAccountManager:
         added = manager.commit_link(link)
         manager.set_nickname(added.account_udn, "Living Room")
 
-    Re-linking an existing account passes its UDN to :meth:`commit_link`'s
-    ``replace_account_udn`` so the record keeps its identity and only the
-    credential package is swapped (:meth:`replace_account_credentials`),
-    instead of committing a duplicate the player would reject.
-
-    Anonymous and legacy username/password services never have a link flow;
-    use :meth:`add_credentials` for them.
+    Re-linking passes the existing account's UDN to :meth:`commit_link`'s
+    ``replace_account_udn`` so only the credentials are swapped
+    (:meth:`replace_account_credentials`) instead of committing a duplicate.
     """
 
     def __init__(
@@ -456,11 +432,8 @@ class MusicServiceAccountManager:
 
     @property
     def accounts(self):
-        """list: The configured accounts for this service in the household.
-
-        Equivalent to :meth:`ConfiguredMusicServiceAccount.get_accounts`
-        filtered to this service. Anonymous services are never listed here
-        because the player stores no account record for them.
+        """list: This service's configured accounts in the household, including
+        keyless records (see :meth:`ConfiguredMusicServiceAccount.get_accounts`).
         """
         return [
             account
@@ -496,11 +469,9 @@ class MusicServiceAccountManager:
     def _account_key(service_id, account_udn):
         """Return the account-key identifier the player accepts for edits.
 
-        Edit operations resolve the account only when AccountID is the key
-        tail after the encoded-type prefix (``X_#Svc...-Token``, stored as
-        Username0); the full ``SA_RINCON...`` UDN is rejected with UPnP error
-        806. When the prefix does not match, the UDN is passed through
-        unchanged as a fallback.
+        Edits resolve the account by the key tail after the encoded-type
+        prefix; the full ``SA_RINCON...`` UDN is rejected (UPnP 806). Passes
+        the UDN through unchanged when the prefix does not match.
         """
         prefix = "SA_RINCON{}_".format(account_type(service_id))
         return (
@@ -516,11 +487,9 @@ class MusicServiceAccountManager:
     def begin_link(self, callback_path=None):
         """Ask the provider for its browser/app authorization choices.
 
-        Modern services use ``getAppLink`` with the desktop controller's
-        request shape, which makes providers select their desktop/browser
-        authorization path. Older DeviceLink services that reject
-        ``getAppLink`` are retried with ``getDeviceLinkCode``, exactly as
-        their descriptor requires. No player state is changed by this method.
+        Modern services use ``getAppLink``; older DeviceLink services that
+        reject it are retried with ``getDeviceLinkCode``. No player state is
+        changed by this method.
 
         Args:
             callback_path (str, optional): Overrides the manager's callback
@@ -646,10 +615,8 @@ class MusicServiceAccountManager:
     def get_device_auth_token(self, link):
         """Exchange an authorized link code for the provider credential package.
 
-        The controller performs this provider SMAPI call itself after the user
-        finishes the browser authorization. The result -- authToken,
-        privateKey, and userInfo (userIdHashCode, nickname) -- is what
-        :meth:`commit_link` then installs into the player; the player does not
+        The result -- authToken, privateKey, userInfo -- is what
+        :meth:`commit_link` installs into the player; the player does not
         exchange the link code itself.
 
         Args:
@@ -723,26 +690,17 @@ class MusicServiceAccountManager:
     def commit_link(self, link, replace_account_udn=""):
         """Commit an authorized provider link to the household's players.
 
-        Mirrors the desktop controller's commit dispatcher, which has two
-        paths: a fresh account is installed through ``AddOAuthAccountX``,
-        while a re-linked account is replaced in place through
-        ``ReplaceAccountX`` (pass ``replace_account_udn`` to select that
-        path). The player does not exchange the link code itself: the
-        controller first calls the provider's ``getDeviceAuthToken`` for the
-        credential package, then commits it.
-
-        The fresh-add path sends every account value wrapped in the household
-        ``2:`` envelope: AccountToken, AccountKey (the provider's key, which
-        already carries its own epoch stamp), OAuthDeviceID (the household
-        ID), and UserIdHashCode. AuthorizationCode and RedirectURI stay empty
-        and AccountTier is the :data:`ACCOUNT_TIER` constant.
+        A fresh account is installed with ``AddOAuthAccountX``; passing
+        ``replace_account_udn`` swaps the credentials in place instead, with
+        ``ReplaceAccountX``. The player does not exchange the link code: the
+        provider's ``getDeviceAuthToken`` is called first and the resulting
+        credential package is wrapped in the household ``2:`` envelope.
 
         Args:
             link (AccountLink): A link returned by :meth:`begin_link` whose
                 code the user has authorized.
             replace_account_udn (str): When given, re-link in place: the
-                record keeps this UDN and only the credential package is
-                swapped via ``ReplaceAccountX`` instead of adding a duplicate.
+                record keeps this UDN and only the credentials are swapped.
 
         Returns:
             AddedAccount: The committed account record.
@@ -787,8 +745,7 @@ class MusicServiceAccountManager:
             if user_id_hash
             else ""
         )
-        # The provider's privateKey already carries its own ``/<epoch_millis>``
-        # stamp, so the key is enveloped verbatim. AccountTier is ACCOUNT_TIER.
+        # The privateKey carries its own epoch stamp; envelope it verbatim.
         try:
             response = self._sp.call(
                 "AddOAuthAccountX",
@@ -831,22 +788,12 @@ class MusicServiceAccountManager:
         )
 
     def replace_account_credentials(self, account_udn, credential):
-        """Replace one existing household account's stored credentials in place.
+        """Replace one existing account's stored credentials in place.
 
-        Native contract (confirmed against the player's SystemProperties
-        SCPD): ReplaceAccountX takes AccountUDN (the existing record),
-        NewAccountID, NewAccountPassword, AccountToken, AccountKey,
-        OAuthDeviceID, and NewAccountUDN. The desktop controller's commit
-        dispatcher uses this action when re-linking an account instead of
-        AddOAuthAccountX: the record keeps its UDN and only the credential
-        package is swapped, so no duplicate record or account-slot clash is
-        created. OAuth-style services leave the legacy NewAccountID/
-        NewAccountPassword pair empty, exactly as the desktop's replace commit
-        does.
-
-        The credential values follow the AddOAuthAccountX envelope contract
-        (household ``2:`` envelope); ReplaceAccountX itself has no output
-        arguments (SCPD), so the existing UDN is reported unchanged.
+        This is the re-link path: the record keeps its UDN and only the
+        credential package is swapped (``ReplaceAccountX``), so no duplicate
+        record is created. A ``2:`` blob ``account_udn`` is decoded first and
+        the legacy ID/password fields stay empty for OAuth services.
 
         Args:
             account_udn (str): The existing account's UDN, either the
@@ -906,10 +853,8 @@ class MusicServiceAccountManager:
     def add_credentials(self, username="", password=""):
         """Add an anonymous or legacy username/password service account.
 
-        Anonymous descriptors are committed with an empty account ID: the
-        player rejects any other value for them (UPnP error 402) and stores a
-        keyless record. Such records remain browsable and can be removed again
-        with the empty-key RemoveAccount contract.
+        Anonymous descriptors are committed with an empty account ID (the
+        player rejects any other value, UPnP 402) and store a keyless record.
 
         Args:
             username (str): The account username, required for UserId and
@@ -950,14 +895,9 @@ class MusicServiceAccountManager:
     def set_nickname(self, account_udn, nickname):
         """Rename one configured household account.
 
-        Native contract: SetAccountNicknameX takes AccountUDN and
-        AccountNickname, both wrapped in the household ``2:`` envelope
-        (AES-128-CBC under the household-derived key, the same envelope as
-        ThirdPartyMediaServersX); plaintext values are rejected with UPnP
-        error 402. The account identifier may arrive in either form: the
-        plaintext ``SA_RINCON...`` UDN from the account inventory, or the
-        ``2:`` blob returned by AddAccountX/AddOAuthAccountX -- the latter is
-        decoded back to plaintext first so it is never double-encoded.
+        Both arguments are wrapped in the household ``2:`` envelope (plaintext
+        values are rejected with UPnP 402); a ``2:`` blob ``account_udn`` is
+        decoded first so it is never double-encoded.
 
         Args:
             account_udn (str): The account's UDN (canonical or ``2:`` blob).
@@ -990,12 +930,8 @@ class MusicServiceAccountManager:
     def remove_account(self, account_udn):
         """Remove one configured account from every player in the household.
 
-        Native contract: RemoveAccount takes the encoded AccountType and the
-        account key as AccountID. Keyed accounts carry the full
-        ``SA_RINCON...`` UDN, which the player resolves for removal. Keyless
-        records (empty Username0, truncated UDN) resolve only with an empty
-        AccountID: ``RemoveAccount(type, "")`` returns 200 and removes exactly
-        that service's keyless record, while the truncated UDN is rejected
+        Keyless records (truncated UDN) are removed with an empty AccountID
+        (``RemoveAccount(type, "")``); the truncated UDN itself is rejected
         with UPnP error 806.
 
         Args:
@@ -1100,12 +1036,9 @@ class MusicServiceAccountManager:
     def refresh_account_credentials(self, account_uid, token, key):
         """Push a freshly obtained token/key pair into the stored account record.
 
-        Native contract: RefreshAccountCredentialsX takes the encoded
-        AccountType, the numeric AccountUID from the account UDN, and the
-        AccountToken/AccountKey pair. This is the player-side persistence of a
-        provider reauthorization; it is distinct from
-        ``SmapiClient.refresh_auth_token``, which asks the provider for a
-        fresh token without writing anything to the player.
+        This is the player-side persistence of a reauthorization, distinct
+        from ``SmapiClient.refresh_auth_token`` (which asks the provider for a
+        fresh token without writing to the player).
 
         Args:
             account_uid (int): The numeric AccountUID from the account UDN
@@ -1141,13 +1074,10 @@ class MusicServiceAccountManager:
     def _translate_commit_fault(self, fault):
         """Turn a player rejection of AddOAuthAccountX into an actionable error.
 
-        A UPnP 402 can have several causes (historically, a malformed
-        UserIdHashCode). When the household already holds an account for this
-        service, a duplicate-add refusal is the most plausible one, so the
-        configured accounts are checked to point at the existing account
-        instead of surfacing a bare ``invalid arguments``. Returns None when
-        the fault cannot be explained, so the caller re-raises the original
-        fault unchanged.
+        A 402 can have several causes, but when the household already holds an
+        account for this service a duplicate-add refusal is the most plausible
+        one, so point at the existing account. Returns None when the fault
+        cannot be explained, so the caller re-raises it unchanged.
         """
         if fault.upnp_code == 402:
             try:
@@ -1225,12 +1155,9 @@ def _link_from_result(music_service, household_id, callback_path, action, value)
 def _app_link_only_stub(value):
     """Detect a provider's encrypted app-link marker with no browser path.
 
-    Apple Music's getAppLink returns only an empty ``callToAction`` and
-    ``appUrlEncrypt=true`` -- no ``appUrl``, ``regUrl``, or ``linkCode`` --
-    for every platform identity. That marker advertises app-to-app linking
-    only, so there is no standalone browser authorization that could be
-    opened and committed. The official Sonos desktop app is limited to the
-    same app-to-app path.
+    Apple Music's getAppLink returns only ``appUrlEncrypt=true`` with no
+    appUrl, regUrl, or linkCode: app-to-app linking only, with no standalone
+    browser authorization to open and commit.
     """
     if not isinstance(value, dict):
         return False
