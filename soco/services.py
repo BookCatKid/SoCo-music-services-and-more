@@ -932,6 +932,7 @@ class AVTransport(Service):
                 737: "No DNS Server",
                 738: "Bad Domain Name",
                 739: "Server Error",
+                800: "No such object",
             }
         )
         self.DEFAULT_ARGS.update({"InstanceID": 0})

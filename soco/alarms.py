@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from . import discovery
 from .core import _SocoSingletonBase, PLAY_MODES
-from .exceptions import SoCoException
+from .exceptions import SoCoException, SoCoUPnPException
 from .xml import XML
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,27 @@ def is_valid_recurrence(text):
     if text in ("DAILY", "ONCE", "WEEKDAYS", "WEEKENDS"):
         return True
     return re.search(r"^ON_[0-6]{1,7}$", text) is not None
+
+
+def _get_zone(zone=None):
+    """Return the given zone, or an arbitrary zone if none is given."""
+    if zone is not None:
+        return zone
+    return discovery.any_soco()
+
+
+def _sonos_duration(duration):
+    """Format a duration as Sonos' ``H:MM:SS`` format, e.g. ``0:09:00``.
+
+    Accepts a `datetime.timedelta` or a `datetime.time`.
+    """
+    if isinstance(duration, timedelta):
+        total_seconds = int(duration.total_seconds())
+    else:
+        total_seconds = duration.hour * 3600 + duration.minute * 60 + duration.second
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
 
 
 class Alarms(_SocoSingletonBase):
@@ -244,6 +265,57 @@ class Alarms(_SocoSingletonBase):
                 next_alarm_datetime = this_next_datetime
         return next_alarm_datetime
 
+    def is_alarm_running(self, zone=None):
+        """Check whether an alarm is currently ringing on the zone.
+
+        Args:
+            zone (`SoCo`, optional): The zone to check. Defaults to the last
+                zone used, or an arbitrary zone.
+
+        Returns:
+            bool: `True` if an alarm is currently ringing.
+        """
+        if zone is None:
+            zone = self._last_zone_used or discovery.any_soco()
+        try:
+            zone.avTransport.GetRunningAlarmProperties([("InstanceID", 0)])
+            return True
+        except SoCoUPnPException as exc:
+            if exc.error_code == "800":
+                return False
+            raise
+
+    def get_running_alarm(self, zone=None):
+        """Get the alarm that is currently ringing on the zone.
+
+        Args:
+            zone (`SoCo`, optional): The zone to check. Defaults to the last
+                zone used, or an arbitrary zone.
+
+        Returns:
+            `Alarm`: The ringing alarm, or `None` if no alarm is ringing. If
+                the alarm has not been loaded by `update()`, a lightweight
+                instance carrying just the alarm ID and zone is returned.
+        """
+        if zone is None:
+            zone = self._last_zone_used or discovery.any_soco()
+        try:
+            props = zone.avTransport.GetRunningAlarmProperties([("InstanceID", 0)])
+        except SoCoUPnPException as exc:
+            if exc.error_code == "800":
+                return None
+            raise
+        try:
+            self.update(zone)
+        except SoCoException:
+            # The zone may belong to another household's alarm list.
+            pass
+        alarm = self.get(props["AlarmID"])
+        if alarm is None:
+            alarm = Alarm(zone=zone)
+            alarm._alarm_id = props["AlarmID"]  # pylint: disable=protected-access
+        return alarm
+
 
 class Alarm:
     """A class representing a Sonos Alarm.
@@ -391,13 +463,7 @@ class Alarm:
                 that was not yet registered). Call `Alarms.update_skipped()`
                 with the zone once it is available before saving.
         """
-        if self.zone is None:
-            raise SoCoException(
-                "Cannot save alarm {}: zone is not set. "
-                "Call Alarms.update_skipped() with the zone first.".format(
-                    self._alarm_id
-                )
-            )
+        self._require_zone("save")
         args = [
             ("StartLocalTime", self.start_time.strftime(TIME_FORMAT)),
             (
@@ -445,6 +511,72 @@ class Alarm:
         alarms.alarms.pop(self.alarm_id, None)
         self._alarm_id = None
         return result
+
+    def _require_zone(self, action):
+        """Raise if the alarm has no zone, e.g. it was skipped on `update`."""
+        if self.zone is None:
+            raise SoCoException(
+                "Cannot {} alarm {}: zone is not set. "
+                "Call Alarms.update_skipped() with the zone first.".format(
+                    action, self._alarm_id
+                )
+            )
+
+    def snooze(self, duration=timedelta(minutes=9)):
+        """Snooze the alarm if it is currently ringing.
+
+        The alarm stops ringing and resumes after the given duration. While
+        snoozed the alarm still counts as running (`Alarms.is_alarm_running`
+        stays `True`) until it rings again or is dismissed.
+
+        Args:
+            duration (datetime.timedelta or int, optional): How long to
+                snooze for. An int is treated as minutes. Defaults to
+                9 minutes.
+
+        Raises:
+            SoCoException: if the alarm has no zone.
+        """
+        self._require_zone("snooze")
+        if isinstance(duration, int):
+            duration = timedelta(minutes=duration)
+        self.zone.avTransport.SnoozeAlarm(
+            [("InstanceID", 0), ("Duration", _sonos_duration(duration))]
+        )
+
+    def play(self):
+        """Preview the alarm's content on its zone.
+
+        Plays the alarm's program, or the built-in chime if none is set,
+        as normal playback (like the Sonos app's alarm preview). This is
+        not a ringing alarm; use `snooze` or `dismiss` while an alarm is
+        ringing.
+
+        Raises:
+            SoCoException: if the alarm has no zone.
+        """
+        self._require_zone("play")
+        uri = "x-rincon-buzzer:0" if self.program_uri is None else self.program_uri
+        self.zone.play_uri(uri, meta=self.program_metadata, title="Alarm preview")
+
+    def dismiss(self):
+        """Dismiss the alarm if it is currently ringing on its zone.
+
+        Raises:
+            SoCoException: if the alarm is not currently ringing.
+        """
+        self._require_zone("dismiss")
+        try:
+            running = self.zone.avTransport.GetRunningAlarmProperties()
+        except SoCoUPnPException as exc:
+            if exc.error_code == "800":
+                running = None
+            else:
+                raise
+        if running is None or running["AlarmID"] != self.alarm_id:
+            label = f"Alarm {self._alarm_id}" if self._alarm_id else "The alarm"
+            raise SoCoException(f"{label} is not currently ringing")
+        self.zone.avTransport.Stop([("InstanceID", 0)])
 
     @property
     def alarm_id(self):
@@ -601,3 +733,146 @@ def parse_alarm_payload(payload, zone):
 
         alarm_args[alarm_id] = args
     return alarm_args
+
+
+DEFAULT_TIME_SERVERS = (
+    "0.sonostime.pool.ntp.org,1.sonostime.pool.ntp.org,"
+    "2.sonostime.pool.ntp.org,3.sonostime.pool.ntp.org"
+)
+
+
+def get_time_format(zone=None):
+    """Get the time and date formats used for the clock display.
+
+    Args:
+        zone (`SoCo`, optional): the zone to query. Defaults to an arbitrary
+            zone.
+
+    Returns:
+        dict: Keys are ``time_format`` and ``date_format``. Time formats are
+        ``12H``, ``24H``, ``12H_NS`` or ``24H_NS`` (``_NS`` = no seconds);
+        date formats are ``NO_DF``, ``DD/MM/YYYY``, ``MM/DD/YYYY`` or
+        ``YYYY/MM/DD``.
+    """
+    response = _get_zone(zone).alarmClock.GetFormat()
+    return {
+        "time_format": response["CurrentTimeFormat"],
+        "date_format": response["CurrentDateFormat"],
+    }
+
+
+def set_time_format(zone=None, time_format="24H", date_format="NO_DF"):
+    """Set the time and date formats used for the clock display.
+
+    See `get_time_format` for the valid values.
+
+    Args:
+        zone (`SoCo`, optional): the zone to set. Defaults to an arbitrary
+            zone.
+        time_format (str, optional): The time format. Defaults to ``24H``.
+        date_format (str, optional): The date format. Defaults to ``NO_DF``.
+    """
+    _get_zone(zone).alarmClock.SetFormat(
+        [("DesiredTimeFormat", time_format), ("DesiredDateFormat", date_format)]
+    )
+
+
+def get_time_zone(zone=None):
+    """Get the zone's timezone settings.
+
+    Args:
+        zone (`SoCo`, optional): the zone to query. Defaults to an arbitrary
+            zone.
+
+    Returns:
+        dict: ``index`` (int) and ``auto_adjust_dst`` (bool).
+    """
+    response = _get_zone(zone).alarmClock.GetTimeZone()
+    return {
+        "index": int(response["Index"]),
+        "auto_adjust_dst": response["AutoAdjustDst"] == "1",
+    }
+
+
+def set_time_zone(zone=None, index=None, auto_adjust_dst=True):
+    """Set the zone's timezone.
+
+    Args:
+        zone (`SoCo`, optional): the zone to set. Defaults to an arbitrary
+            zone.
+        index (int, optional): The timezone index, as returned by
+            `get_time_zone`. Defaults to the zone's current index.
+        auto_adjust_dst (bool, optional): Whether to adjust for daylight
+            saving automatically. Defaults to `True`.
+    """
+    zone = _get_zone(zone)
+    if index is None:
+        index = get_time_zone(zone)["index"]
+    zone.alarmClock.SetTimeZone(
+        [("Index", index), ("AutoAdjustDst", "1" if auto_adjust_dst else "0")]
+    )
+
+
+def get_time_now(zone=None):
+    """Get the current time as known by the zone.
+
+    Args:
+        zone (`SoCo`, optional): the zone to query. Defaults to an arbitrary
+            zone.
+
+    Returns:
+        dict: ``utc_time`` and ``local_time`` as `datetime` objects, plus
+        the raw ``time_zone`` and ``generation`` strings.
+    """
+    response = _get_zone(zone).alarmClock.GetTimeNow()
+    return {
+        "utc_time": datetime.strptime(response["CurrentUTCTime"], "%Y-%m-%d %H:%M:%S"),
+        "local_time": datetime.strptime(
+            response["CurrentLocalTime"], "%Y-%m-%d %H:%M:%S"
+        ),
+        "time_zone": response["CurrentTimeZone"],
+        "generation": response["CurrentTimeGeneration"],
+    }
+
+
+def get_time_server(zone=None):
+    """Get the NTP time server(s) used by the zone.
+
+    Args:
+        zone (`SoCo`, optional): the zone to query. Defaults to an arbitrary
+            zone.
+
+    Returns:
+        str: A comma-separated list of NTP server addresses.
+    """
+    return _get_zone(zone).alarmClock.GetTimeServer()["CurrentTimeServer"]
+
+
+def set_time_server(zone=None, server=DEFAULT_TIME_SERVERS):
+    """Set the NTP time server(s) used by the zone.
+
+    Args:
+        zone (`SoCo`, optional): the zone to set. Defaults to an arbitrary
+            zone.
+        server (str, optional): A comma-separated list of NTP server
+            addresses. Defaults to the standard Sonos time servers.
+    """
+    _get_zone(zone).alarmClock.SetTimeServer([("DesiredTimeServer", server)])
+
+
+def get_time_zone_rule(zone=None, index=None):
+    """Get the timezone rule table for the given index.
+
+    Args:
+        zone (`SoCo`, optional): the zone to query. Defaults to an arbitrary
+            zone.
+        index (int, optional): The timezone index. Defaults to the zone's
+            current index.
+
+    Returns:
+        str: The timezone rule string for the index.
+    """
+    zone = _get_zone(zone)
+    if index is None:
+        index = get_time_zone(zone)["index"]
+    return zone.alarmClock.GetTimeZoneRule([("Index", index)])["TimeZone"]
