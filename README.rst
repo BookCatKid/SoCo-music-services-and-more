@@ -113,12 +113,55 @@ Notes
 
 - Browsing configured accounts needs either the ``cryptography`` package or an
   ``openssl`` executable on your system (used to decrypt the account payload
-  Sonos sends to the players).
+  Sonos sends to the players). Install the dependency explicitly with
+  ``pip install soco[music-services]``.
 - The new API is read-only as far as playback is concerned: it browses, searches
   and inspects metadata, but nothing is played or queued unless you do it with
   the rest of SoCo.
+- Apple Music accounts already linked to your Sonos system work with the new
+  API. Linking a *new* Apple Music account still has to be started from the
+  Sonos mobile app; it cannot be completed from a third-party controller.
 - Testing against real Sonos setups is very welcome, as is feedback on the API
   design — please open an issue or PR on this fork.
+
+Not a drop-in replacement
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The new API intentionally does not mirror every legacy ``MusicService`` call:
+
+- Browsing returns the new ``MusicServiceBrowseItem`` / result models rather
+  than the legacy ``MusicService`` data structures.
+- When a service has several configured accounts you must pick one explicitly
+  (``MusicServiceBrowser(service, account=...)``); the browser no longer
+  guesses which account to use.
+- Playback of browsed content goes through ``sonos_uri_from_id()``, which
+  produces player-resolved ``x-sonosapi-stream:`` URIs rather than the legacy
+  stream URIs.
+
+The legacy ``MusicService`` API is unchanged and remains available for code
+that depends on it.
+
+Real-system verification
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Unit fixtures cannot establish that an advertised service works end to end, so
+this table records what has been verified against a real Sonos household. It is
+a living document — please update it when you test a provider/operation
+combination.
+
+=========================== ============== ============== ========================= =================================
+Provider                     Auth type      Accounts       Operations verified      Notes
+=========================== ============== ============== ========================= =================================
+Apple Music                  OAuth          1              browse, search,          Existing accounts work; new
+                                                          metadata, playback        linking requires the Sonos app
+Amazon Music                 OAuth          2              browse, metadata         Playback can fail when the
+                                                                                    linked account is in a bad
+                                                                                    state; re-link in the Sonos app
+Spotify                      OAuth          2              browse, search           With several accounts, pick the
+                                                                                    account to use explicitly
+TuneIn                       anonymous      1              add/remove account       username/password services are
+                                                                                    added directly
+=========================== ============== ============== ========================= =================================
 
 Installation
 ------------
