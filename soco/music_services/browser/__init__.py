@@ -7,10 +7,11 @@ implemented here. In particular, this package does not add, remove,
 rename, authorize, or otherwise mutate music-service accounts.
 
 Playback is always resolved by the player, never by this package:
-:meth:`~MusicServiceBrowser.sonos_uri_from_id` builds a ``x-sonosapi-stream:``
-URI which the speaker dereferences with its own credentials. The provider's
-controller-side ``getMediaURI`` action is dead in practice (services reject
-or ignore it), so it is deliberately not exposed.
+:meth:`~MusicServiceBrowser.play` builds the player-resolved URI and DIDL
+metadata for a browsed item (track, stream, program, show or audiobook) and
+hands them to :meth:`SoCo.play_uri`. :meth:`~MusicServiceBrowser.sonos_uri_from_id`
+exposes the lower-level ``x-sonosapi-stream:`` URI for services whose radio
+streams resolve that scheme.
 
 Playing favorites and containers: favorites store a res URI. Pure radio
 URIs (``x-sonosapi-stream:``, ``x-rincon-mp3radio:``, …) and track URIs
@@ -55,6 +56,7 @@ from .credentials import (
     ConfiguredMusicServiceAccount,
 )
 from .models import _legacy_item, MusicServiceBrowseItem, MusicServiceBrowseResult
+from .playback import build_metadata, build_uri, resolve_item
 from .transport import _ConfiguredSmapiClient
 from .util import _as_list, _as_mapping, _as_string
 
@@ -147,28 +149,24 @@ class MusicServiceBrowser:
         return ConfiguredMusicServiceAccount.get_accounts(device, timeout)
 
     def _single_configured_account(self):
-        # Anonymous services do not need household credentials. Avoid the
-        # encrypted account event entirely so this companion API remains as
-        # lightweight as the existing MusicService path for those providers.
-        if self.music_service.auth_type == "Anonymous":
-            return ConfiguredMusicServiceAccount(self.music_service.service_id, 0, "")
-
         accounts = [
             account
             for account in ConfiguredMusicServiceAccount.get_accounts(self.device)
             if account.service_id == int(self.music_service.service_id)
         ]
-        if not accounts:
-            raise MusicServiceAuthException(
-                f"No configured {self.music_service.service_name} account "
-                "was found in this household"
-            )
+        if len(accounts) == 1:
+            return accounts[0]
         if len(accounts) > 1:
             raise MusicServiceAuthException(
                 f"Multiple {self.music_service.service_name} accounts are "
                 "configured; pass an account explicitly"
             )
-        return accounts[0]
+        if self.music_service.auth_type == "Anonymous":
+            return ConfiguredMusicServiceAccount(self.music_service.service_id, 0, "")
+        raise MusicServiceAuthException(
+            f"No configured {self.music_service.service_name} account "
+            "was found in this household"
+        )
 
     def _make_client(self, household_id):
         return _ConfiguredSmapiClient(
@@ -580,6 +578,40 @@ class MusicServiceBrowser:
             f"x-sonosapi-stream:{encoded}?sid={self.music_service.service_id}"
             f"&sn={self.account.serial_number}"
         )
+
+    def play(self, item, device=None, **kwargs):
+        """Play a browsed item on a Sonos device.
+
+        Builds the player-resolved URI and DIDL metadata for one playable item
+        and sends them with :meth:`SoCo.play_uri`. Track, stream, program,
+        show and audiobook items are supported; containers must be browsed
+        into first.
+
+        Args:
+            item (MusicServiceBrowseItem or str): A playable item from
+                :meth:`get_metadata` or :meth:`search`, or a raw item id.
+            device (SoCo, optional): The device to play on. Defaults to the
+                device the browser was constructed with.
+            kwargs: Additional arguments forwarded to :meth:`SoCo.play_uri`.
+
+        Returns:
+            The result of :meth:`SoCo.play_uri`.
+
+        Raises:
+            MusicServiceException: If the item cannot be played (for example
+                a container, or an item type without a known URI mapping), or
+                if the service is not added to this household.
+        """
+        player = device or self.device
+        if self.auth_type == "Anonymous" and not self.account.udn:
+            raise MusicServiceException(
+                f"{self.service_name} is not added to this household, so its "
+                "content cannot be played; add the service first"
+            )
+        item_id, item_type, mime, title = resolve_item(self, item)
+        uri = build_uri(self, item_id, item_type, mime)
+        metadata = build_metadata(self, item_id, title, item_type)
+        return player.play_uri(uri, meta=metadata, **kwargs)
 
     def get_extended_metadata(self, item):
         """Return provider extended metadata (related items and text)."""

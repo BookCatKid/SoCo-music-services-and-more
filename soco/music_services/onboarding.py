@@ -69,6 +69,7 @@ UPNP_ERROR_TEXT = {
     702: "invalid arguments",
     714: "illegal value for argument",
     800: "action not supported for this service/account on this player",
+    802: "maximum number of connected music services reached",
     806: "account could not be resolved",
 }
 
@@ -1090,10 +1091,16 @@ class MusicServiceAccountManager:
                 or UPNP_ERROR_TEXT.get(fault.upnp_code, "")
                 or "unspecified UPnP error"
             )
-            return MusicServiceException(
+            message = (
                 f"The player rejected {action} for the account (UPnP error "
                 f"{fault.upnp_code}: {meaning}). {note}"
             )
+            if fault.upnp_code == 802:
+                message += (
+                    " The household has reached its connected-service limit; "
+                    "remove an unused account first, then retry."
+                )
+            return MusicServiceException(message)
         return MusicServiceException(
             f"The player rejected {action} (HTTP {fault.http_status}): {fault.message}"
         )

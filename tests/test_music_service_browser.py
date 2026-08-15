@@ -16,7 +16,6 @@ from soco.music_services.browser import (
 )
 from soco.xml import XML
 
-
 ACCOUNT_XML = b"""\
 <MediaServers>
   <Service
@@ -385,9 +384,7 @@ def test_expired_token_does_not_refresh_unless_enabled():
 
 def test_manifest_root_returns_sections_and_embedded_items(monkeypatch):
     manifest = {
-        "endpoints": [
-            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
-        ]
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}]
     }
     page = {
         "views": [
@@ -437,9 +434,7 @@ def test_manifest_root_returns_sections_and_embedded_items(monkeypatch):
 
 def test_content_child_switches_to_smapi_with_account_scoped_household(monkeypatch):
     manifest = {
-        "endpoints": [
-            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
-        ]
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}]
     }
     session = FakeSession(
         get_responses=[FakeResponse(json_value=manifest)],
@@ -611,6 +606,9 @@ def test_anonymous_search_uses_shared_household_client(monkeypatch):
     session = FakeSession(post_responses=[FakeResponse(content=SEARCH_RESPONSE)])
     service = FakeService(auth_type="Anonymous")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    monkeypatch.setattr(
+        ConfiguredMusicServiceAccount, "get_accounts", lambda *_args, **_kwargs: []
+    )
     music_browser = MusicServiceBrowser("Example", device=FakeDevice(), session=session)
 
     result = music_browser.search("tracks", "hello")
@@ -656,8 +654,7 @@ def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
     uri = music_browser.sonos_uri_from_id("spotify:track:2qs5ZcLByNTctJKbhAZ9JE")
 
     assert (
-        uri
-        == "x-sonosapi-stream:spotify%3Atrack%3A2qs5ZcLByNTctJKbhAZ9JE?sid=204&sn=3"
+        uri == "x-sonosapi-stream:spotify%3Atrack%3A2qs5ZcLByNTctJKbhAZ9JE?sid=204&sn=3"
     )
 
 
@@ -974,14 +971,32 @@ def test_multiple_configured_accounts_require_explicit_selection(monkeypatch):
         MusicServiceBrowser("Example", device=FakeDevice(), session=FakeSession())
 
 
-def test_anonymous_service_does_not_capture_account_event(monkeypatch):
+def test_anonymous_service_uses_household_account_when_added(monkeypatch):
+    # Anonymous services can be added to a household, which gives them a real
+    # account (serial number + UDN) that playback URIs need.
     service = FakeService(auth_type="Anonymous")
     monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    account = make_account()
+    monkeypatch.setattr(
+        ConfiguredMusicServiceAccount,
+        "get_accounts",
+        lambda *_args, **_kwargs: [account],
+    )
 
-    def should_not_run(*_args, **_kwargs):
-        raise AssertionError("anonymous browsing should not inspect accounts")
+    music_browser = MusicServiceBrowser(
+        "Example", device=FakeDevice(), session=FakeSession()
+    )
 
-    monkeypatch.setattr(ConfiguredMusicServiceAccount, "get_accounts", should_not_run)
+    assert music_browser.account is account
+
+
+def test_anonymous_service_without_account_uses_synthetic(monkeypatch):
+    service = FakeService(auth_type="Anonymous")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    monkeypatch.setattr(
+        ConfiguredMusicServiceAccount, "get_accounts", lambda *_args, **_kwargs: []
+    )
+
     music_browser = MusicServiceBrowser(
         "Example", device=FakeDevice(), session=FakeSession()
     )
@@ -992,9 +1007,7 @@ def test_anonymous_service_does_not_capture_account_event(monkeypatch):
 
 def test_content_http_401_does_not_refresh_when_disabled(monkeypatch):
     manifest = {
-        "endpoints": [
-            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
-        ]
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}]
     }
     session = FakeSession(
         get_responses=[FakeResponse(json_value=manifest), FakeResponse(status_code=401)]
@@ -1017,9 +1030,7 @@ def test_content_http_401_does_not_refresh_when_disabled(monkeypatch):
 
 def test_content_http_401_refreshes_by_default(monkeypatch):
     manifest = {
-        "endpoints": [
-            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
-        ]
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}]
     }
     refresh_response = b"""\
     <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
@@ -1156,9 +1167,7 @@ PMAP_XML = b"""\
 
 def test_get_manifest_returns_parsed_json_and_caches(monkeypatch):
     manifest = {
-        "endpoints": [
-            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
-        ],
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}],
         "presentationMap": {
             "uri": "https://content.invalid/pmap.xml",
             "version": 484,
@@ -1193,9 +1202,7 @@ def test_get_manifest_empty_without_manifest_uri(monkeypatch):
 
 def test_get_presentation_map_parses_all_blocks(monkeypatch):
     manifest = {
-        "endpoints": [
-            {"type": "browse", "uri": "https://content.invalid/browse/v1"}
-        ],
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}],
         "presentationMap": {
             "uri": "https://content.invalid/pmap.xml",
             "version": 484,

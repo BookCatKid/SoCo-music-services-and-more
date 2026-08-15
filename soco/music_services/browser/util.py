@@ -116,30 +116,23 @@ def _artwork_uri(record):
 
 
 def _legacy_item_kind(provider_kind, record):
-    """Mirror the desktop controller's canPush distinction for SMAPI items."""
+    """Mirror the desktop controller's canPush distinction for SMAPI items.
+
+    A provider ``mediaCollection`` element is a container unless it declares
+    ``canEnumerate=false`` (a playable item the provider wrapped in a
+    collection element, eg a Pandora station). ``itemType`` is not a reliable
+    signal either way: JazzGroove sends its browsable playlists as
+    ``mediaCollection`` with ``itemType=program`` and no ``canEnumerate``.
+    """
     if provider_kind != "mediaCollection":
         return provider_kind
 
     object_id = str(record.get("id", "")).lower()
-    # These provider records are controller actions, not browse containers.
-    if object_id.startswith(("upsell-banner/", "refmarketplace:")):
+    # Upsell banners are controller actions, not browse containers.
+    if object_id.startswith("upsell-banner/"):
         return "mediaMetadata"
 
     can_enumerate = _explicit_bool(record.get("canEnumerate"))
-    if can_enumerate is True:
-        return provider_kind
     if can_enumerate is False:
-        return "mediaMetadata"
-
-    item_type = str(record.get("itemType", "")).lower()
-    if item_type in {"program", "stream", "track"}:
-        return "mediaMetadata"
-    if _explicit_bool(record.get("canPlay")) is True and item_type not in {
-        "album",
-        "albumlist",
-        "collection",
-        "container",
-        "playlist",
-    }:
         return "mediaMetadata"
     return provider_kind

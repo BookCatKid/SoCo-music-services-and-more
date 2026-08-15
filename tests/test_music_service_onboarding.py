@@ -1063,6 +1063,26 @@ def test_add_credentials_translates_player_rejection(monkeypatch):
         manager.add_credentials("", "")
 
 
+def test_add_credentials_service_cap_is_actionable(monkeypatch):
+    service = FakeService(service_id=512, name="SomaFM", auth_type="Anonymous")
+    manager = build_manager(monkeypatch, service)
+    patch_sp_call(
+        monkeypatch,
+        [
+            onboarding._SystemPropertiesFault(
+                "AddAccountX", 500, "s:Client", "UPnPError", upnp_code=802
+            )
+        ],
+    )
+
+    with pytest.raises(
+        MusicServiceException,
+        match="maximum number of connected music services reached",
+    ) as error:
+        manager.add_credentials("", "")
+    assert "remove an unused account" in str(error.value)
+
+
 def test_commit_without_link_code_is_rejected_before_network(monkeypatch):
     service = FakeService()
     manager = build_manager(monkeypatch, service)
