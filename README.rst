@@ -74,6 +74,83 @@ Browse and search
 
     browser.play(track)                # play a browsed item
 
+Playback
+^^^^^^^^
+
+``MusicServiceBrowser.play`` plays the *player-resolved* way for most services:
+streams are resolved by the player itself from the item's type and MIME, so no
+credentials ever leave the household (``x-sonosapi-stream:``, ``x-sonos-http:``,
+``x-sonosapi-hls-static:``, ...).
+
+DirectControl services (Spotify, Pandora, Audible) use a *virtual
+line-in* session for the modern controller playback path: the speaker
+enters ``x-sonos-vli:...`` and its own cloud session drives the playback,
+rather than the player resolving a direct service resource.  ``play``
+handles this automatically — it enters the DirectControl session and posts
+the item to the speaker's control API (``loadContainer``), which is exactly
+what the desktop controller does:
+
+.. code:: python
+
+    browser = MusicServiceBrowser("Spotify")
+    root = browser.get_metadata()
+    # ... browse to a radio/playlist container ...
+    browser.play(container)          # plays it, app-less and headless
+
+    browser.play(track)              # individual Spotify tracks work too
+
+    # Pandora stations (program items) and Audible books (audiobook items)
+    # route the same way; their browse folders are browsed into, not played.
+
+Because an active DirectControl session is scoped to one service, ``play``
+compares the session's actual DirectControl application id (e.g.
+``spotify.connect.adapter`` vs ``com.audible.mobile.sonos``) before
+entering: if a *different* service's session is running (say Audible, and
+you ask for Spotify), the old session is ended and the requested one
+entered fresh; if the same service is already active and running, ``play``
+just posts the new container, which is how the desktop controller switches
+context without restarting the session; if the same service is active but
+*suspended*, the session is resumed first.  For services that report their
+session (Spotify), ``play`` also waits until the session is established
+before posting the container, and fails if it never becomes active, so the
+context switch cannot race the session start.
+
+You can drive the two halves yourself with
+:meth:`~soco.core.SoCo.play_direct_control` (enter the session) and
+:func:`~soco.music_services.browser.direct_control.load_container` (select the
+context), and end the session with
+:meth:`~soco.core.SoCo.end_direct_control_session`.  The verified
+DirectControl services and their ``loadContainer`` container types live in
+:mod:`soco.music_services.browser.direct_control` (``playlist.spotify.connect``,
+``program.pandora.connect``, ``audiobook.audible.connect``).  The control API
+is hosted on the group coordinator's HTTPS port, defaulting to 1443 (the
+desktop controller's value; ``SSLPort`` in ZoneGroupState) with the API
+version ``v1`` — documented defaults, not auto-discovered.  Pass ``port=``
+to :meth:`~soco.music_services.browser.MusicServiceBrowser.play` or
+:func:`~soco.music_services.browser.direct_control.load_container` to
+override the port when your speakers advertise a different one.
+
+Presentation map and strings
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Most services advertise an XML presentation map describing search categories,
+display types, artwork sizes, quality badges, ratings and quick-skip rules, and
+(Apple-style services) a JSON manifest that also points at a localized
+``strings`` document.  Both are parsed and exposed read-only:
+
+.. code:: python
+
+    pmap = browser.get_presentation_map()     # None if not advertised
+    print(pmap.search_variants())             # {category: [(variant, id)]}
+    print(pmap.artwork_size_map, pmap.display_types)
+
+    strings = browser.get_strings()           # localized string tables
+    print(strings.localized("en-US")["StartStation"])
+    # "Start Station"
+
+    resolved = pmap.resolve_strings(strings)  # StringIds -> display text
+    print(resolved["menu_item_overrides"])
+
 Add and manage accounts
 ^^^^^^^^^^^^^^^^^^^^^^^
 

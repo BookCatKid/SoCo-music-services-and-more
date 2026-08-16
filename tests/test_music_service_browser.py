@@ -133,6 +133,7 @@ class FakeService:
         capabilities="0",
         manifest_uri=None,
         presentation_map_uri=None,
+        strings_uri=None,
         search_variants=None,
     ):
         self.service_name = name
@@ -145,6 +146,7 @@ class FakeService:
         self.uri = "http://example.invalid/smapi"
         self.secure_uri = "https://example.invalid/smapi"
         self.presentation_map_uri = presentation_map_uri
+        self.strings_uri = strings_uri
         self.manifest_uri = manifest_uri
         if search_variants is None:
             search_variants = {"tracks": [("default", "search:track")]}
@@ -658,6 +660,34 @@ def test_sonos_uri_from_id_encodes_account_serial(monkeypatch):
     )
 
 
+def test_sonos_uri_from_id_spotify_track_string_maps_to_spotify_resource(
+    monkeypatch,
+):
+    # Review regression: ``sonos_uri_from_id(track.item_id)`` (a raw string)
+    # for a Spotify track must produce the x-sonos-spotify resource, never
+    # the x-sonosapi-stream radio scheme.
+    service = FakeService(service_id="12")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    account = ConfiguredMusicServiceAccount(
+        12,
+        3,
+        "SA_RINCON3079_X_#Svc3079-00abcdef-Token",
+        token="token-value",
+        key="key-value",
+        nickname="Personal",
+    )
+    music_browser = MusicServiceBrowser(
+        "Spotify", account=account, device=FakeDevice(), session=FakeSession()
+    )
+
+    uri = music_browser.sonos_uri_from_id("spotify:track:7azylXFRsebfrIoAtwfjaB")
+
+    assert uri.startswith("x-sonos-spotify:spotify%3atrack%3a7azylXFRsebfrIoAtwfjaB?")
+    assert "sid=12" in uri
+    assert "flags=8224" in uri
+    assert "sn=3" in uri
+
+
 def test_get_extended_metadata_parses_related_items_and_text(monkeypatch):
     extended = b"""\
     <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
@@ -1163,6 +1193,137 @@ PMAP_XML = b"""\
     </PresentationMap>
 </Presentation>
 """
+
+
+STRINGS_XML = b"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<stringtables xmlns="http://sonos.com/sonosapi">
+  <stringtable rev="1" xml:lang="en-US">
+    <string stringId="StartStation">Start Station</string>
+    <string stringId="StartStation_PROMPT">Start a station?</string>
+    <string stringId="StartStation_SUCCESS">Station started</string>
+    <string stringId="StartStation_FAILURE">Could not start</string>
+    <string stringId="StartStation_DURING">Starting...</string>
+    <string stringId="Artist_And_Album">{artist} - {album}</string>
+  </stringtable>
+  <stringtable rev="1" xml:lang="de-DE">
+    <string stringId="StartStation">Sender starten</string>
+    <string stringId="Artist_And_Album">{artist} - {album}</string>
+  </stringtable>
+</stringtables>
+"""
+
+
+def test_get_strings_parses_all_languages_and_caches(monkeypatch):
+    manifest = {
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}],
+        "strings": {"uri": "https://content.invalid/strings.xml", "version": 484},
+    }
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(json_value=manifest),
+            FakeResponse(content=STRINGS_XML),
+        ]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    strings = music_browser.get_strings()
+
+    assert isinstance(strings, browser.StringTables)
+    assert strings.uri == "https://content.invalid/strings.xml"
+    assert strings.version == 484
+    assert strings.languages == ("en-US", "de-DE")
+    assert strings.localized("en-US")["StartStation"] == "Start Station"
+    assert strings.localized("de-DE")["StartStation"] == "Sender starten"
+    assert strings.resolve("StartStation", "de-DE") == "Sender starten"
+    assert strings.resolve("StartStation_FAILURE", "de-DE") == "StartStation_FAILURE"
+    assert strings.resolve("missing", "en-US", default="?") == "?"
+    # Falls back to any language when the requested one is absent.
+    assert strings.localized("fr-FR") == strings.localized("en-US")
+    # Cached: the second call performs no additional fetch.
+    assert music_browser.get_strings() is strings
+    assert len(session.get_calls) == 2
+
+
+def test_get_strings_none_without_strings_uri(monkeypatch):
+    session = FakeSession()
+    service = FakeService()
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    assert music_browser.get_strings() is None
+    assert music_browser.localized_strings() == {}
+    assert len(session.get_calls) == 0
+
+
+def test_get_strings_prefers_descriptor_uri(monkeypatch):
+    session = FakeSession(get_responses=[FakeResponse(content=STRINGS_XML)])
+    service = FakeService(strings_uri="https://content.invalid/strings.xml")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    assert music_browser.strings_uri == "https://content.invalid/strings.xml"
+    assert music_browser.get_strings() is not None
+    assert len(session.get_calls) == 1
+
+
+def test_presentation_map_resolves_string_ids(monkeypatch):
+    manifest = {
+        "endpoints": [{"type": "browse", "uri": "https://content.invalid/browse/v1"}],
+        "presentationMap": {
+            "uri": "https://content.invalid/pmap.xml",
+            "version": 484,
+        },
+        "strings": {"uri": "https://content.invalid/strings.xml", "version": 484},
+    }
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(json_value=manifest),
+            FakeResponse(content=PMAP_XML),
+            FakeResponse(content=STRINGS_XML),
+        ]
+    )
+    service = FakeService(manifest_uri="https://content.invalid/manifest.json")
+    monkeypatch.setattr(browser, "MusicService", lambda *_args, **_kwargs: service)
+    music_browser = MusicServiceBrowser(
+        "Example", account=make_account(), device=FakeDevice(), session=session
+    )
+
+    pmap = music_browser.get_presentation_map()
+    resolved = pmap.resolve_strings(music_browser.get_strings(), "en-US")
+
+    # Each string-id attribute resolves into its own field: the entry
+    # carries both a plain label and a prompt, so both are preserved.
+    override = resolved["menu_item_overrides"][0]
+    assert override["text"] == "Start Station"
+    assert override["raw_StringId"] == "StartStation"
+    assert override["prompt_text"] == "Start a station?"
+    assert override["raw_PromptStringId"] == "StartStation_PROMPT"
+    # Display-type lines with string ids resolve; token lines are untouched.
+    title_with_artist = resolved["display_types"]["TitleWithArtist"]["lines"]
+    assert title_with_artist == [
+        {"token": "title"},
+        {
+            "string_id": "Artist_And_Album",
+            "text": "{artist} - {album}",
+            "raw_id": "Artist_And_Album",
+        },
+    ]
+    # Ratings carry both their label and success text (VoteUp/VoteUpSuccess
+    # are not in the strings fixture, so each resolves to its own id).
+    rating = resolved["now_playing_ratings"][0]["rating"]
+    assert rating["text"] == "VoteUp"
+    assert rating["raw_string_id"] == "VoteUp"
+    assert rating["success_text"] == "VoteUpSuccess"
+    assert rating["raw_on_success_string_id"] == "VoteUpSuccess"
 
 
 def test_get_manifest_returns_parsed_json_and_caches(monkeypatch):

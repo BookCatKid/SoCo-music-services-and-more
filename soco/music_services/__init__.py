@@ -10,6 +10,7 @@ from .browser import (
     MusicServiceBrowseResult,
     MusicServiceBrowser,
     PresentationMap,
+    StringTables,
 )
 from .onboarding import (
     AccountLink,
@@ -27,6 +28,7 @@ __all__ = [
     "MusicServiceBrowseResult",
     "MusicServiceBrowser",
     "PresentationMap",
+    "StringTables",
     "AccountLink",
     "AddedAccount",
     "DeviceAuthCredential",

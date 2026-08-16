@@ -56,7 +56,16 @@ _ITEM_ID_PREFIXES = {
 # ``flags`` for on-demand track URIs, keyed by service id where a service
 # diverges from the common value. Apple Music rejects the generic 32 and needs
 # 8224, the value the desktop controller sends for its tracks.
-_TRACK_FLAGS_OVERRIDES = {204: 8224}
+#
+# Spotify ``x-sonos-spotify:`` resources sent *directly* to players were
+# verified with flags=8224 across six speaker models by the music-services
+# review.  The ``flags=0`` seen in AVTransport event data is a different
+# representation: it is the current-track identity the speaker reports from
+# inside an already-running VirtualLineIn session, not a controller-sent
+# resource.  (On households whose Spotify account rejects direct
+# ``x-sonos-spotify:`` resources, ``MusicServiceBrowser.play`` routes tracks
+# through the DirectControl ``loadContainer`` path instead.)
+_TRACK_FLAGS_OVERRIDES = {12: 8224, 204: 8224}
 _DEFAULT_TRACK_FLAGS = 32
 
 
@@ -190,7 +199,8 @@ def build_uri(browser, item_id, item_type, mime=""):
 
     # track
     if mime == "audio/x-spotify":
-        return f"x-sonos-spotify:{encoded}?sid={service_id}&flags=0&sn={serial}"
+        flags = _TRACK_FLAGS_OVERRIDES.get(service_id, _DEFAULT_TRACK_FLAGS)
+        return f"x-sonos-spotify:{encoded}?sid={service_id}&flags={flags}&sn={serial}"
     if mime == "audio/flac":
         return f"x-sonos-http:{encoded}.flac?sid={service_id}&flags=0&sn={serial}"
     extension = _MIME_TO_EXT.get(mime, "mp3")
@@ -201,19 +211,32 @@ def build_uri(browser, item_id, item_type, mime=""):
     )
 
 
-def build_metadata(browser, item_id, title, item_type):
+def build_metadata(browser, item_id, title, item_type, mime="", uri=""):
     """Return the DIDL metadata for a playable item.
 
     The ``<desc>`` element carries the account's service descriptor (cdudn);
     the player uses it to pick the account whose credentials dereference the
     stream, so it is the one field that must be present. The stream URI is
-    sent separately by :meth:`SoCo.play_uri`, so no ``<res>`` is emitted.
+    sent separately by :meth:`SoCo.play_uri`, so for ordinary items no
+    ``<res>`` is emitted.
+
+    Spotify resources are the exception: the player needs the resource
+    protocol info (``sonos.com-spotify:*:audio/x-spotify:*``) in the DIDL to
+    accept an ``x-sonos-spotify:`` track, as verified against real players.
+    The literal appears verbatim in the desktop controller binary
+    (``sclib-csharp.dll``) as ``sonos.com-spotify:*:audio/x-spotify:*``.
     """
     item_type = normalize_item_type(item_type)
     klass = _ITEM_CLASSES.get(item_type, _ITEM_CLASSES["track"])
     prefix = _ITEM_ID_PREFIXES.get(item_type, _ITEM_ID_PREFIXES["track"])
     encoded = escape_id(item_id)
     desc = browser.account.udn or browser.music_service.desc
+    res = ""
+    if (mime or "").lower() == "audio/x-spotify":
+        res = (
+            '<res protocolInfo="sonos.com-spotify:*:audio/x-spotify:*">'
+            f"{escape(uri)}</res>"
+        )
     return (
         '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
         'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
@@ -223,6 +246,7 @@ def build_metadata(browser, item_id, title, item_type):
         'restricted="true">'
         f"<dc:title>{escape(title)}</dc:title>"
         f"<upnp:class>{klass}</upnp:class>"
+        f"{res}"
         '<desc id="cdudn" nameSpace="urn:schemas-rinconnetworks-com:'
         f'metadata-1-0/">{escape(desc)}</desc>'
         "</item></DIDL-Lite>"

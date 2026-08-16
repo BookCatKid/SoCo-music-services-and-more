@@ -1,8 +1,10 @@
-"""Manifest and presentation-map data for configured music services.
+"""Manifest, presentation-map and strings data for configured services.
 
 Every music service advertises a JSON ``manifest`` (when it has one) through
-its descriptor, and most services describe their search, display and artwork
-rules in an XML presentation map.  This module parses both into usable
+its descriptor, and most services describe their search, display, artwork,
+ratings and menu rules in an XML presentation map.  The presentation map
+references localized strings by id; the manifest advertises the ``strings``
+document which resolves them.  This module parses all three into usable
 structures.  The browser keeps the parsed results cached in memory, so the
 documents are only fetched once per :class:`MusicServiceBrowser` instance.
 """
@@ -18,6 +20,61 @@ from .util import _as_mapping, _as_string
 
 def _local_name(tag):
     return tag.rsplit("}", 1)[-1]
+
+
+class StringTables:
+    """Parsed localized string tables for one music service.
+
+    The presentation map references strings by id (``StringId``,
+    ``PromptStringId``, ``OnSuccessStringId``, ...).  The strings document
+    resolves those ids to display text per language.  :attr:`tables` maps a
+    language tag (``en-US``, ``de-DE``, ...) to a ``{string_id: text}`` dict.
+    """
+
+    def __init__(self, uri="", version=None, tables=None, raw_xml=""):
+        self.uri = uri
+        self.version = version
+        self.tables = {lang: dict(entries) for lang, entries in (tables or {}).items()}
+        self.raw_xml = raw_xml
+
+    def __repr__(self):
+        return (
+            f"<{self.__class__.__name__} uri={self.uri!r} version="
+            f"{self.version} languages={len(self.tables)} at {hex(id(self))}>"
+        )
+
+    @property
+    def languages(self):
+        """tuple: The language tags with a table, in document order."""
+        return tuple(self.tables)
+
+    def localized(self, lang="en-US"):
+        """Return the ``{string_id: text}`` table for a language.
+
+        Falls back to any available table when the requested language is not
+        present.
+        """
+        if lang in self.tables:
+            return self.tables[lang]
+        if self.tables:
+            return next(iter(self.tables.values()))
+        return {}
+
+    def resolve(self, string_id, lang="en-US", default=None):
+        """Return the display text for a string id in a language.
+
+        Args:
+            string_id (str): The id referenced by the presentation map.
+            lang (str): The desired language tag.
+            default: Returned when the id is unknown; ``string_id`` itself
+                when ``None``.
+        """
+        if not string_id:
+            return default
+        text = self.localized(lang).get(string_id)
+        if text is None:
+            return string_id if default is None else default
+        return text
 
 
 class PresentationMap:
@@ -86,6 +143,92 @@ class PresentationMap:
                     (variant, entry["mapped_id"])
                 )
         return variants
+
+    def resolve_strings(self, string_tables, lang="en-US"):
+        """Return a copy with presentation-map string ids resolved to text.
+
+        The presentation map references localized strings by id
+        (``StringId``, ``PromptStringId``, ``SuccessStringId``,
+        ``FailureStringId``, ``InProgressStringId`` on menu-item overrides;
+        ``StringId``/``OnSuccessStringId`` on ratings; ``string_id`` on
+        display lines).  This returns a plain dict in the same shape as
+        :attr:`menu_item_overrides`, :attr:`now_playing_ratings` and
+        :attr:`display_types`, with each id resolved into its own text field
+        (``text``, ``prompt_text``, ``success_text``, ``failure_text``,
+        ``in_progress_text``) plus ``raw_<attr>`` keys keeping the original
+        ids.
+
+        Args:
+            string_tables (:class:`StringTables`): The service strings.
+            lang (str): The desired language tag.
+
+        Returns:
+            dict: ``{"menu_item_overrides": [...], "now_playing_ratings":
+            [...], "display_types": {...}}`` with string ids resolved.
+        """
+        resolve = lambda string_id: string_tables.resolve(string_id, lang)  # noqa: E731
+
+        # Map a presentation-map string-id attribute to its resolved field
+        # name.  Menu entries can carry separate prompt/success/failure/
+        # in-progress texts, so each id is resolved into its own field rather
+        # than collapsing them all into a single "text" (which would lose
+        # information for entries carrying more than one id).
+        _TEXT_FIELDS = {
+            "StringId": "text",
+            "PromptStringId": "prompt_text",
+            "SuccessStringId": "success_text",
+            "FailureStringId": "failure_text",
+            "InProgressStringId": "in_progress_text",
+        }
+
+        def resolved_override(override):
+            result = dict(override)
+            for raw_key, text_key in _TEXT_FIELDS.items():
+                if result.get(raw_key):
+                    result[text_key] = resolve(result[raw_key])
+                    result["raw_{}".format(raw_key)] = result[raw_key]
+            return result
+
+        def resolved_rating(entry):
+            result = {
+                key: dict(value) if isinstance(value, dict) else value
+                for key, value in entry.items()
+            }
+            rating = result["rating"]
+            # Mirror the menu-override treatment: a rating can carry both a
+            # button label (StringId) and a success message
+            # (OnSuccessStringId); resolve each into its own field instead of
+            # taking the first and discarding the other.
+            for raw_key, text_key in (
+                ("string_id", "text"),
+                ("on_success_string_id", "success_text"),
+            ):
+                raw_id = rating.get(raw_key)
+                if raw_id:
+                    rating[text_key] = resolve(raw_id)
+                    rating["raw_{}".format(raw_key)] = raw_id
+            return result
+
+        def resolved_display_type(node):
+            result = dict(node)
+            for line in result.get("lines", []):
+                if line.get("string_id"):
+                    line["text"] = resolve(line["string_id"])
+                    line["raw_id"] = line["string_id"]
+            return result
+
+        return {
+            "menu_item_overrides": [
+                resolved_override(override) for override in self.menu_item_overrides
+            ],
+            "now_playing_ratings": [
+                resolved_rating(entry) for entry in self.now_playing_ratings
+            ],
+            "display_types": {
+                key: resolved_display_type(node)
+                for key, node in self.display_types.items()
+            },
+        }
 
 
 def parse_presentation_map(payload, uri="", version=None):
@@ -330,6 +473,108 @@ def _parse_quick_skips(block):
                     pass
         result[skip_type] = entry
     return result
+
+
+def parse_string_tables(payload, uri="", version=None):
+    """Parse a strings document into a :class:`StringTables`.
+
+    The document is the ``<stringtables>`` XML advertised by the manifest's
+    ``strings`` entry: one ``<stringtable xml:lang="...">`` per language,
+    each holding ``<string stringId="...">text</string>`` entries.
+
+    Args:
+        payload (bytes): The raw strings document.
+        uri (str): Where the document was fetched from, kept for reference.
+        version: The version advertised by the manifest, if any.
+
+    Returns:
+        :class:`StringTables`: The parsed model.
+    """
+    root = XML.fromstring(payload)
+    tables = {}
+    # ``xml:lang`` is a namespaced attribute: ElementTree exposes it under the
+    # XML namespace URI, so both spellings are handled here.
+    lang_keys = ("xml:lang", "lang", "{http://www.w3.org/XML/1998/namespace}lang")
+    for table in root.iter():
+        if _local_name(table.tag) != "stringtable":
+            continue
+        lang = next(
+            (table.get(key) for key in lang_keys if table.get(key)),
+            None,
+        )
+        if not lang:
+            continue
+        entries = {}
+        for entry in table:
+            if _local_name(entry.tag) != "string":
+                continue
+            string_id = entry.get("stringId")
+            if string_id:
+                entries[string_id] = entry.text or ""
+        tables[lang] = entries
+    return StringTables(
+        uri=uri,
+        version=version,
+        tables=tables,
+        raw_xml=payload.decode("utf-8", "replace"),
+    )
+
+
+def _resolve_strings_uri(music_service, manifest=None):
+    """Return the service strings URI, or ``""`` when none exists.
+
+    The descriptor's ``StringsUri`` wins when advertised; otherwise the JSON
+    manifest's ``strings.uri`` entry is used (Apple-style services deliver
+    the strings document only through the manifest).
+    """
+    if getattr(music_service, "strings_uri", None):
+        return music_service.strings_uri
+    if manifest:
+        entry = _as_mapping(manifest.get("strings"))
+        return _as_string(entry.get("uri"))
+    return ""
+
+
+def _fetch_string_tables(music_service, session, manifest=None):
+    """Fetch and parse a service's strings document.
+
+    The URI is resolved from the descriptor or the (already fetched)
+    ``manifest``.  Returns ``None`` when the service does not advertise one.
+    Network and parse failures raise :class:`MusicServiceException`.
+
+    Args:
+        music_service: The legacy descriptor object.
+        session: The shared requests session.
+        manifest (dict, optional): The parsed service manifest, when already
+            available.
+
+    Returns:
+        :class:`StringTables` or ``None``.
+    """
+    uri = _resolve_strings_uri(music_service, manifest)
+    if not uri:
+        return None
+    version = None
+    if manifest:
+        entry = _as_mapping(manifest.get("strings"))
+        version = entry.get("version")
+    try:
+        response = session.get(
+            uri,
+            headers={"Accept": "application/xml", "Accept-Language": "en-US"},
+            timeout=20,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise MusicServiceException(
+            f"{music_service.service_name} strings request failed: {error}"
+        ) from error
+    try:
+        return parse_string_tables(response.content, uri=uri, version=version)
+    except XML.ParseError as error:
+        raise MusicServiceException(
+            f"{music_service.service_name} strings document was not valid XML"
+        ) from error
 
 
 def _resolve_presentation_map_uri(music_service, manifest=None):
