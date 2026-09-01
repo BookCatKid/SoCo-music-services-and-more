@@ -609,29 +609,6 @@ class TestAVTransport:
         moco.play()
         moco.avTransport.Play.assert_called_once_with([("InstanceID", 0), ("Speed", 1)])
 
-    def test_soco_play_direct_control(self, moco):
-        moco._uid = "RINCON_00012345678901234"
-        moco.avTransport.reset_mock()
-
-        moco.play_direct_control("spotify", label="abc", title="Spotify")
-
-        args = moco.avTransport.SetAVTransportURI.call_args[0][0]
-        action = dict(args)
-        assert action["CurrentURI"] == (
-            "x-sonos-vli:RINCON_00012345678901234:2,spotify:abc"
-        )
-        assert (
-            "<upnp:class>object.item.audioItem.linein</upnp:class>"
-            in action["CurrentURIMetaData"]
-        )
-        assert "<dc:title>Spotify</dc:title>" in action["CurrentURIMetaData"]
-        assert 'id="spotify"' in action["CurrentURIMetaData"]
-        assert (
-            "x-sonos-vli:RINCON_00012345678901234:2,spotify:abc"
-            in action["CurrentURIMetaData"]
-        )
-        moco.avTransport.Play.assert_called_once_with([("InstanceID", 0), ("Speed", 1)])
-
     # Test that uris are forced to Radio style display and controls when
     # force_radio is True prefix is replaced with "x-rincon-mp3radion://"
     # first set of test with no forcing, second set with force_radio=True
@@ -996,93 +973,6 @@ class TestAVTransport:
         }
         playing_tv = moco.is_playing_line_in
         assert not playing_tv
-
-    def test_is_playing_direct_control(self, moco):
-        moco.avTransport.reset_mock()
-        # Generic DirectControl session (e.g. Audible)
-        moco.avTransport.GetPositionInfo.return_value = {
-            "TrackURI": (
-                "x-sonos-vli:RINCON_00012345678901234:2,com.audible.mobile.sonos:abc"
-            )
-        }
-        assert moco.is_playing_direct_control
-
-        # Spotify Connect is classified separately but is still a
-        # DirectControl (virtual line-in) session.
-        moco.avTransport.GetPositionInfo.return_value = {
-            "TrackURI": "x-sonos-vli:RINCON_00012345678901234:2,spotify:abc"
-        }
-        assert moco.is_playing_direct_control
-
-        moco.avTransport.GetPositionInfo.return_value = {
-            "TrackURI": "not-vli",
-        }
-        assert not moco.is_playing_direct_control
-
-    def test_music_source_from_uri(self):
-        from soco.core import (
-            MUSIC_SRC_AIRPLAY,
-            MUSIC_SRC_DIRECT_CONTROL,
-            MUSIC_SRC_LIBRARY,
-            MUSIC_SRC_LINE_IN,
-            MUSIC_SRC_NONE,
-            MUSIC_SRC_RADIO,
-            MUSIC_SRC_SPOTIFY_CONNECT,
-            MUSIC_SRC_TV,
-            MUSIC_SRC_UNKNOWN,
-            MUSIC_SRC_WEB_FILE,
-            SoCo,
-        )
-
-        assert SoCo.music_source_from_uri("") == MUSIC_SRC_NONE
-        assert (
-            SoCo.music_source_from_uri("x-file-cifs:music/foo.mp3") == MUSIC_SRC_LIBRARY
-        )
-        assert (
-            SoCo.music_source_from_uri("x-rincon-mp3radio://example.com/radio")
-            == MUSIC_SRC_RADIO
-        )
-        assert (
-            SoCo.music_source_from_uri("x-sonosapi-stream:live:p1") == MUSIC_SRC_RADIO
-        )
-        assert (
-            SoCo.music_source_from_uri("http://example.com/foo.mp3")
-            == MUSIC_SRC_WEB_FILE
-        )
-        assert SoCo.music_source_from_uri("x-rincon-stream:linein") == MUSIC_SRC_LINE_IN
-        assert (
-            SoCo.music_source_from_uri(
-                "x-sonos-htastream:RINCON_00012345678901234:spdif"
-            )
-            == MUSIC_SRC_TV
-        )
-        # Virtual line-in variants
-        assert (
-            SoCo.music_source_from_uri(
-                "x-sonos-vli:RINCON_00012345678901234:2,airplay:abc"
-            )
-            == MUSIC_SRC_AIRPLAY
-        )
-        assert (
-            SoCo.music_source_from_uri(
-                "x-sonos-vli:RINCON_00012345678901234:2,spotify:abc"
-            )
-            == MUSIC_SRC_SPOTIFY_CONNECT
-        )
-        # Any other DirectControl session (Audible, Pandora, ...)
-        assert (
-            SoCo.music_source_from_uri(
-                "x-sonos-vli:RINCON_00012345678901234:2,com.audible.mobile.sonos:abc"
-            )
-            == MUSIC_SRC_DIRECT_CONTROL
-        )
-        assert (
-            SoCo.music_source_from_uri(
-                "x-sonos-vli:RINCON_00012345678901234:2,pandora:abc"
-            )
-            == MUSIC_SRC_DIRECT_CONTROL
-        )
-        assert SoCo.music_source_from_uri("bogus-uri") == MUSIC_SRC_UNKNOWN
 
     def test_create_sonos_playlist(self, moco):
         playlist_name = "cool music"

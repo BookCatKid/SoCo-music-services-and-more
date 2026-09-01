@@ -59,12 +59,8 @@ _ITEM_ID_PREFIXES = {
 #
 # Spotify ``x-sonos-spotify:`` resources sent *directly* to players were
 # verified with flags=8224 across six speaker models by the music-services
-# review.  The ``flags=0`` seen in AVTransport event data is a different
-# representation: it is the current-track identity the speaker reports from
-# inside an already-running VirtualLineIn session, not a controller-sent
-# resource.  (On households whose Spotify account rejects direct
-# ``x-sonos-spotify:`` resources, ``MusicServiceBrowser.play`` routes tracks
-# through the DirectControl ``loadContainer`` path instead.)
+# review. The ``flags=0`` seen in AVTransport event data is the current-track
+# identity reported by the speaker, not the controller-sent resource.
 _TRACK_FLAGS_OVERRIDES = {12: 8224, 204: 8224}
 _DEFAULT_TRACK_FLAGS = 32
 

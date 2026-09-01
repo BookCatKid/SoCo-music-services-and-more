@@ -14,13 +14,6 @@ hands them to :meth:`SoCo.play_uri`. :meth:`~MusicServiceBrowser.sonos_uri_from_
 exposes the lower-level ``x-sonosapi-stream:`` URI for services whose radio
 streams resolve that scheme.
 
-DirectControl services (Spotify, and in principle Pandora/Audible) are the
-exception: the modern controller playback path uses a virtual line-in
-session. For their containers,
-:meth:`~MusicServiceBrowser.play` enters the service's virtual line-in
-session (see :meth:`SoCo.play_direct_control`) and posts the container to
-the speaker's control API (:mod:`soco.music_services.browser.direct_control`).
-
 Playing favorites and containers: favorites store a res URI. Pure radio
 URIs (``x-sonosapi-stream:``, ``x-rincon-mp3radio:``, …) and track URIs
 (``x-sonos-http:``) can be handed straight to a player; container URIs
@@ -49,12 +42,7 @@ from urllib.parse import quote as quote_url
 import requests
 
 from ... import discovery
-from ...core import MUSIC_SRC_DIRECT_CONTROL, MUSIC_SRC_SPOTIFY_CONNECT
-from ...exceptions import (
-    MusicServiceAuthException,
-    MusicServiceException,
-    SoCoUPnPException,
-)
+from ...exceptions import MusicServiceAuthException, MusicServiceException
 from ..music_service import MusicService
 from .catalog import (
     _fetch_presentation_map,
@@ -73,16 +61,6 @@ from .credentials import (
     _account_content_device_id,
     _local_time_zone,
     ConfiguredMusicServiceAccount,
-)
-from .direct_control import (
-    direct_control_app_id,
-    direct_control_container_type,
-    direct_control_observable,
-    direct_control_playable_item_types,
-    direct_control_provider,
-    direct_control_session,
-    load_container,
-    wait_for_direct_control,
 )
 from .models import _legacy_item, MusicServiceBrowseItem, MusicServiceBrowseResult
 from .playback import build_metadata, build_uri, resolve_item
@@ -642,13 +620,17 @@ class MusicServiceBrowser:
         Accepts either a :class:`MusicServiceBrowseItem` or a raw item id.
         A browsed item is resolved MIME-aware (see
         :func:`soco.music_services.browser.playback.build_uri`): a Spotify
-        track, for example, becomes an ``x-sonos-spotify:`` resource with
-        the Spotify protocol info, never the ``x-sonosapi-stream:`` radio
-        scheme.  A bare ``spotify:track:...`` id is unambiguous (only
-        Spotify uses that namespace) and is mapped the same way; any other
-        bare id carries no type or MIME information, so it falls back to
-        the ``x-sonosapi-stream:`` scheme the player uses to resolve
-        radio/stream content itself.
+        track, for example, becomes an ``x-sonos-spotify:`` URI, never the
+        ``x-sonosapi-stream:`` radio scheme.  A bare ``spotify:track:...`` id
+        is unambiguous (only Spotify uses that namespace) and is mapped the
+        same way; any other bare id carries no type or MIME information, so it
+        falls back to the ``x-sonosapi-stream:`` scheme the player uses to
+        resolve radio/stream content itself.
+
+        This is deliberately a URI-only helper. It cannot carry the DIDL
+        resource protocol information, title, or selected account descriptor
+        required for complete Spotify metadata. Use :meth:`play` for normal
+        playback; it sends the URI and DIDL together.
         """
         if isinstance(item_id, MusicServiceBrowseItem):
             _item_id, item_type, mime, _title = resolve_item(self, item_id)
@@ -670,30 +652,20 @@ class MusicServiceBrowser:
         show and audiobook items are supported; containers must be browsed
         into first.
 
-        DirectControl services (Spotify playlists, radio and tracks,
-        Pandora stations, Audible books) are the exception: the modern
-        controller playback path for them uses a virtual line-in session.
-        They are played by entering the service's virtual line-in session
-        (``x-sonos-vli:``) and posting the item to the speaker's control
-        API (``loadContainer``).
-
         Args:
             item (MusicServiceBrowseItem or str): A playable item from
                 :meth:`get_metadata` or :meth:`search`, or a raw item id.
             device (SoCo, optional): The device to play on. Defaults to the
                 device the browser was constructed with.
-            kwargs: Additional arguments forwarded to :meth:`SoCo.play_uri`
-                (or used by the DirectControl flow).
+            kwargs: Additional arguments forwarded to :meth:`SoCo.play_uri`.
 
         Returns:
-            The result of :meth:`SoCo.play_uri`, or ``True`` after the
-            DirectControl flow succeeds.
+            The result of :meth:`SoCo.play_uri`.
 
         Raises:
             MusicServiceException: If the item cannot be played (for example
-                a container of a non-DirectControl service, or an item type
-                without a known URI mapping), or if the service is not added
-                to this household.
+                a container, or an item type without a known URI mapping), or
+                if the service is not added to this household.
         """
         player = device or self.device
         if self.auth_type == "Anonymous" and not self.account.udn:
@@ -701,134 +673,10 @@ class MusicServiceBrowser:
                 f"{self.service_name} is not added to this household, so its "
                 "content cannot be played; add the service first"
             )
-        if isinstance(item, MusicServiceBrowseItem):
-            provider = direct_control_provider(self.service_id)
-            if provider and self._is_direct_control_playable(item):
-                return self._play_direct_control(item, player, provider, **kwargs)
         item_id, item_type, mime, title = resolve_item(self, item)
         uri = build_uri(self, item_id, item_type, mime)
         metadata = build_metadata(self, item_id, title, item_type, mime=mime, uri=uri)
         return player.play_uri(uri, meta=metadata, **kwargs)
-
-    def _is_direct_control_playable(self, item):
-        """Whether ``item`` is a playable unit of this DirectControl service.
-
-        Spotify's playable units are its containers (radio/playlist/album)
-        *and* its tracks (the desktop's ``playlist.spotify.connect``
-        container type accepts a bare track object id). Pandora's are its
-        stations (``program`` items) and Audible's are its books
-        (``audiobook`` items); their browse folders are *not* playable and
-        fall through to normal URI playback.
-        """
-        playable_types = direct_control_playable_item_types(self.service_id)
-        from .playback import normalize_item_type
-
-        if item.can_browse:
-            # Spotify containers (SID 9 and 12) are its playable units;
-            # Pandora's and Audible's browse folders are not.
-            return int(self.service_id) in (9, 12)
-        return normalize_item_type(item.item_type) in (playable_types or set())
-
-    def _play_direct_control(self, item, player, provider, **kwargs):
-        """Play a DirectControl-service container via the control API.
-
-        Enters the service's virtual line-in session on the player (unless
-        that exact service's DirectControl application is already active),
-        waits for the session to be established, then posts the container to
-        the speaker's control API so the session starts playing that
-        context. Requires the player to be part of a group (the group UID is
-        part of the control-API URL).
-        """
-        container_type = kwargs.pop("container_type", None)
-        container_type = container_type or direct_control_container_type(
-            self.service_id
-        )
-        if container_type is None:
-            raise MusicServiceException(
-                f"No verified DirectControl container type for "
-                f"{self.service_name}; pass container_type explicitly"
-            )
-        group = player.group
-        if group is None:
-            raise MusicServiceException(
-                f"{getattr(player, 'player_name', None) or player} is not part "
-                "of a group, so DirectControl playback cannot target it"
-            )
-        # The control API is hosted by the group coordinator's HTTPS port.
-        host = group.coordinator if group.coordinator is not None else player
-        port = kwargs.pop("port", None)
-        wait_timeout = kwargs.pop("wait_timeout", 10)
-
-        # loadContainer switches the context of an *active* DirectControl
-        # session; re-entering a session that is already running leaves it
-        # paused.  The broad music-source class is not enough to decide
-        # whether to enter: an active Audible session is also
-        # ``DIRECT_CONTROL``, and posting a Spotify container into it would
-        # silently fail.  Compare the actual DirectControl session
-        # (``playbackSession`` from the control API) instead.
-        expected_app = direct_control_app_id(self.service_id)
-        session = direct_control_session(
-            host, group.uid, timeout=kwargs.pop("timeout", 10), port=port
-        )
-        # A different DirectControl application is active when the control
-        # API reports a session with another client id.  But Pandora and
-        # Audible never report a session there, so an *unobservable*
-        # active session surfaces as ``session is None`` while the player
-        # is still on a DirectControl/VLI source.  In that case the old
-        # session must still be ended before entering the requested one,
-        # otherwise the Spotify container is posted into the running
-        # Pandora/Audible session.
-        different_known_app = session is not None and session.client_id != expected_app
-        unknown_existing_dc = session is None and (
-            player.music_source in (MUSIC_SRC_DIRECT_CONTROL, MUSIC_SRC_SPOTIFY_CONNECT)
-        )
-        if different_known_app or unknown_existing_dc:
-            # End the existing session before entering the requested one.
-            # Ending is a no-op (UPnP 718) when nothing is running; any
-            # other failure is a real error and must not be swallowed.
-            try:
-                player.end_direct_control_session()
-            except SoCoUPnPException as error:
-                if error.error_code != "718":
-                    raise
-        needs_entry = session is None or session.client_id != expected_app
-        if needs_entry or (session is not None and session.suspended):
-            # No session, a different application, or the same application
-            # but suspended: (re)enter the requested service's session.
-            # Re-entering a *running* session would leave it paused, so it
-            # is only done here for the fresh/suspended cases.
-            player.play_direct_control(provider, title=self.service_name)
-            # Entering a session is asynchronous; loadContainer must not
-            # race the session start.  Only services that actually report
-            # a DirectControl session (Spotify) are waited on; Pandora and
-            # Audible surface their loaded content as ordinary transports
-            # and never report a session, so waiting would always time out.
-            if direct_control_observable(self.service_id):
-                if not wait_for_direct_control(
-                    host,
-                    group.uid,
-                    expected_app,
-                    timeout=wait_timeout,
-                    port=port,
-                ):
-                    raise MusicServiceException(
-                        f"{self.service_name} DirectControl session did not "
-                        "become active within {wait_timeout}s; the speaker "
-                        "may have failed to start the session"
-                    )
-        return load_container(
-            device=host,
-            group_uid=group.uid,
-            object_id=item.item_id,
-            service_id=self.service_id,
-            account_serial=self.account.serial_number,
-            name=item.title,
-            container_type=container_type,
-            image_url=getattr(item, "album_art_uri", "") or "",
-            description=getattr(item, "summary", "") or "",
-            timeout=kwargs.pop("timeout", 10),
-            port=port,
-        )
 
     def get_extended_metadata(self, item):
         """Return provider extended metadata (related items and text)."""

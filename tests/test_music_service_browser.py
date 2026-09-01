@@ -1,6 +1,7 @@
 """Tests for read-only configured music-service browsing."""
 
 import base64
+import builtins
 import hashlib
 import json
 from types import SimpleNamespace
@@ -287,6 +288,60 @@ def test_account_payload_rejects_bad_integrity(monkeypatch):
 
     with pytest.raises(MusicServiceException, match="integrity"):
         browser._decrypt_account_payload(encoded, "Sonos_household")
+
+
+def _block_cryptography_import(monkeypatch):
+    """Force the credential helpers down their OpenSSL fallback path."""
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "cryptography" or name.startswith("cryptography."):
+            raise ImportError("cryptography disabled by test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+
+def test_aes_cryptography_backend_round_trip(monkeypatch):
+    """The optional Python backend can encrypt and decrypt account values."""
+    pytest.importorskip("cryptography")
+
+    def unexpected_openssl(_name):
+        raise AssertionError("OpenSSL fallback used with cryptography installed")
+
+    monkeypatch.setattr(browser.credentials.shutil, "which", unexpected_openssl)
+    key = bytes(range(16))
+    iv = bytes(range(16, 32))
+    plaintext = b"configured account value"
+
+    ciphertext = browser.credentials._aes_128_cbc_encrypt(plaintext, key, iv)
+
+    assert ciphertext != plaintext
+    assert browser.credentials._aes_128_cbc_decrypt(ciphertext, key, iv) == plaintext
+
+
+def test_aes_openssl_fallback_round_trip(monkeypatch):
+    """OpenSSL remains a working fallback when cryptography is unavailable."""
+    if not browser.credentials.shutil.which("openssl"):
+        pytest.skip("OpenSSL executable is not available")
+    _block_cryptography_import(monkeypatch)
+    key = bytes(range(16))
+    iv = bytes(range(16, 32))
+    plaintext = b"configured account value"
+
+    ciphertext = browser.credentials._aes_128_cbc_encrypt(plaintext, key, iv)
+
+    assert ciphertext != plaintext
+    assert browser.credentials._aes_128_cbc_decrypt(ciphertext, key, iv) == plaintext
+
+
+def test_aes_backend_error_without_cryptography_or_openssl(monkeypatch):
+    """A useful error is raised when neither supported backend is available."""
+    _block_cryptography_import(monkeypatch)
+    monkeypatch.setattr(browser.credentials.shutil, "which", lambda _name: None)
+
+    with pytest.raises(MusicServiceException, match="cryptography.*OpenSSL"):
+        browser.credentials._aes_128_cbc_decrypt(b"0" * 16, b"1" * 16, b"2" * 16)
 
 
 def test_smapi_get_metadata_preserves_provider_quirks_and_artwork():

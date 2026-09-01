@@ -25,6 +25,7 @@ Usage::
     python examples/verify_music_services.py            # prompts for a speaker
     python examples/verify_music_services.py --ip 192.168.1.51
     python examples/verify_music_services.py --no-play  # skip playback tests
+    python examples/verify_music_services.py --volume 3 --play-seconds 3
 """
 
 from __future__ import unicode_literals
@@ -53,9 +54,12 @@ from soco.music_services.browser import (  # noqa: E402
 )
 from soco.music_services.browser.playback import normalize_item_type  # noqa: E402
 from soco.music_services.music_service import MusicService  # noqa: E402
+from soco.snapshot import Snapshot  # noqa: E402
 
 # How long to wait for a playback attempt to reach a terminal state.
 PLAY_WAIT_SECONDS = 8
+DEFAULT_TEST_VOLUME = 3
+DEFAULT_PLAY_SECONDS = 3.0
 # Bounds for the recursive browse that hunts for playable item types.
 MAX_BROWSE_DEPTH = 5
 MAX_BROWSE_ITEMS = 20
@@ -232,6 +236,156 @@ def _terminal_state(speaker):
     return state
 
 
+def _group_signature(speaker):
+    """Return a stable signature of the speaker's current group topology."""
+    group = speaker.group
+    if group is None:
+        return speaker.uid, (speaker.uid,)
+    coordinator = group.coordinator or speaker
+    return coordinator.uid, tuple(sorted(member.uid for member in group.members))
+
+
+def _snapshot_playback_group(speaker):
+    """Snapshot transport plus per-zone audio state immediately before a test.
+
+    Playback on a grouped player affects the group coordinator and can be
+    audible on every member, so every member is snapshotted. ``Snapshot``
+    restores the coordinator's URI/metadata, queue position, transport state,
+    volume and mute, while member snapshots restore their individual audio
+    settings.
+    """
+    group = speaker.group
+    coordinator = (group.coordinator if group is not None else None) or speaker
+    members = list(group.members) if group is not None else [speaker]
+    snapshots = []
+    # Restore the coordinator first; keep the remaining member snapshots only
+    # for their individual volume/mute/EQ state.
+    members.sort(key=lambda member: member.uid != coordinator.uid)
+    for member in members:
+        snapshot = Snapshot(member)
+        snapshot.snapshot()
+        # Snapshot already preserves queue position. For a seekable URI played
+        # outside the queue, keep the current relative position as well so a
+        # playback test does not silently restart the user's track at 0:00.
+        snapshot.verifier_track_position = None
+        if snapshot.is_coordinator and not snapshot.is_playing_queue:
+            try:
+                track = member.get_current_track_info()
+            except Exception:  # pylint: disable=broad-except
+                track = None
+            if track:
+                position = track.get("position") or ""
+                duration = track.get("duration") or ""
+                if position not in (
+                    "",
+                    "0:00:00",
+                    "NOT_IMPLEMENTED",
+                ) and duration not in (
+                    "",
+                    "0:00:00",
+                    "NOT_IMPLEMENTED",
+                ):
+                    snapshot.verifier_track_position = position
+        snapshots.append(snapshot)
+    return coordinator, snapshots, _group_signature(speaker)
+
+
+def _unsafe_restore_reason(coordinator_snapshot):
+    """Explain why replacing the current transport would not be reversible."""
+    uri = coordinator_snapshot.media_uri or ""
+    if coordinator_snapshot.is_playing_cloud_queue:
+        return "current cloud queue cannot be reconstructed safely"
+    if uri.startswith("x-sonos-vli:"):
+        return (
+            "current provider-controlled/DirectControl session cannot be "
+            "reconstructed safely"
+        )
+    return ""
+
+
+def _cap_group_volume(snapshots, volume):
+    """Cap every audible group member without ever increasing its volume."""
+    changed = []
+    for snapshot in snapshots:
+        if snapshot.volume is None or snapshot.volume <= volume:
+            continue
+        try:
+            snapshot.device.volume = volume
+            changed.append(snapshot.device.player_name)
+        except Exception as error:  # pylint: disable=broad-except
+            raise MusicServiceException(
+                "could not cap %s at volume %d: %s"
+                % (snapshot.device.player_name, volume, _scrub(error))
+            ) from error
+    return changed
+
+
+def _restore_playback_group(speaker, coordinator, snapshots, group_signature):
+    """Stop the test and restore the state captured immediately before it."""
+    errors = []
+    try:
+        coordinator.stop()
+    except Exception as error:  # pylint: disable=broad-except
+        errors.append("stop: %s" % _scrub(error))
+
+    # Keep the whole group muted while reinstating its transport. Snapshot
+    # restores PLAYING sources by calling play(), and muting first prevents a
+    # loud burst at the old track's beginning before its saved position is
+    # reinstated. Original mute states are restored after every source/state
+    # operation below is complete.
+    original_mutes = []
+    for snapshot in snapshots:
+        original_mutes.append((snapshot, snapshot.mute))
+        try:
+            snapshot.device.mute = True
+        except Exception as error:  # pylint: disable=broad-except
+            errors.append(
+                "mute %s for restore: %s" % (snapshot.device.player_name, _scrub(error))
+            )
+        snapshot.mute = True
+
+    # Coordinator first so the old transport is back before member volumes.
+    for snapshot in snapshots:
+        try:
+            snapshot.restore()
+            if snapshot.is_coordinator and snapshot.verifier_track_position:
+                snapshot.device.seek(snapshot.verifier_track_position)
+            # Snapshot restores PLAYING and STOPPED explicitly. Recreate a
+            # paused transport as well instead of leaving the restored source
+            # merely stopped.
+            if (
+                snapshot.is_coordinator
+                and snapshot.transport_state == "PAUSED_PLAYBACK"
+            ):
+                snapshot.device.play()
+                snapshot.device.pause()
+        except Exception as error:  # pylint: disable=broad-except
+            errors.append(
+                "restore %s: %s" % (snapshot.device.player_name, _scrub(error))
+            )
+
+    for snapshot, original_mute in original_mutes:
+        snapshot.mute = original_mute
+        try:
+            snapshot.device.mute = original_mute
+        except Exception as error:  # pylint: disable=broad-except
+            errors.append(
+                "restore mute %s: %s" % (snapshot.device.player_name, _scrub(error))
+            )
+
+    try:
+        current_group = _group_signature(speaker)
+    except Exception as error:  # pylint: disable=broad-except
+        errors.append("verify group: %s" % _scrub(error))
+    else:
+        if current_group != group_signature:
+            # This verifier never changes grouping. A mismatch therefore
+            # means topology changed externally while the test was running;
+            # do not overwrite a user's concurrent grouping action.
+            errors.append("group topology changed during playback test")
+    return errors
+
+
 def browse_items(browser, start="root", depth=0, budget=None, deadline=None):
     """Yield (depth, item) pairs by descending the browse tree, bounded."""
     if budget is None:
@@ -327,23 +481,62 @@ def test_metadata(browser, item):
         return {"status": "error", "detail": _scrub(error)}
 
 
-def test_playback(browser, speaker, item):
+def test_playback(browser, speaker, item, volume, play_seconds):
     try:
-        browser.play(item, device=speaker)
-    except MusicServiceException as error:
-        return {"status": "error", "detail": _scrub(error)}
+        coordinator, snapshots, group_signature = _snapshot_playback_group(speaker)
     except Exception as error:  # pylint: disable=broad-except
-        return {"status": "error", "detail": _scrub(error)}
-    state = _terminal_state(speaker)
-    return {
-        "status": "ok" if state == "PLAYING" else "error",
-        "detail": state,
-        "item_id": item.item_id,
-        "title": item.title,
-    }
+        return {
+            "status": "skipped",
+            "detail": "could not snapshot current playback safely: %s" % _scrub(error),
+        }
+
+    coordinator_snapshot = next(
+        snapshot for snapshot in snapshots if snapshot.device.uid == coordinator.uid
+    )
+    unsafe_reason = _unsafe_restore_reason(coordinator_snapshot)
+    if unsafe_reason:
+        return {"status": "skipped", "detail": unsafe_reason}
+
+    result = None
+    try:
+        _cap_group_volume(snapshots, volume)
+        browser.play(item, device=coordinator)
+    except MusicServiceException as error:
+        result = {"status": "error", "detail": _scrub(error)}
+    except Exception as error:  # pylint: disable=broad-except
+        result = {"status": "error", "detail": _scrub(error)}
+    else:
+        state = _terminal_state(coordinator)
+        result = {
+            "status": "ok" if state == "PLAYING" else "error",
+            "detail": state,
+            "item_id": item.item_id,
+            "title": item.title,
+        }
+        if state == "PLAYING" and play_seconds:
+            time.sleep(play_seconds)
+    finally:
+        restore_errors = _restore_playback_group(
+            speaker, coordinator, snapshots, group_signature
+        )
+
+    if restore_errors:
+        detail = result.get("detail", "") if result else ""
+        suffix = "restore warning: %s" % "; ".join(restore_errors)
+        if detail:
+            suffix = "%s; %s" % (detail, suffix)
+        return {
+            "status": "error",
+            "detail": suffix,
+            "item_id": item.item_id,
+            "title": item.title,
+        }
+    return result
 
 
-def test_configured_service(speaker, entry, account, run_playback):
+def test_configured_service(
+    speaker, entry, account, run_playback, playback_volume=3, play_seconds=3.0
+):
     results = {"tests": {}}
     try:
         browser = MusicServiceBrowser(entry["name"], account=account, device=speaker)
@@ -366,7 +559,13 @@ def test_configured_service(speaker, entry, account, run_playback):
     if run_playback:
         playback = {}
         for item_type in sorted(items):
-            playback[item_type] = test_playback(browser, speaker, items[item_type])
+            playback[item_type] = test_playback(
+                browser,
+                speaker,
+                items[item_type],
+                playback_volume,
+                play_seconds,
+            )
         results["tests"]["playback"] = playback
     return results
 
@@ -572,6 +771,22 @@ def main():
         action="store_true",
         help="Skip playback tests (browse/search/metadata only)",
     )
+    parser.add_argument(
+        "--volume",
+        type=int,
+        default=DEFAULT_TEST_VOLUME,
+        help=(
+            "Maximum volume for playback tests across every member of the "
+            "selected speaker's group (default: %(default)s; never raises a "
+            "member above its current volume)"
+        ),
+    )
+    parser.add_argument(
+        "--play-seconds",
+        type=float,
+        default=DEFAULT_PLAY_SECONDS,
+        help="Seconds to leave each successful playback audible (default: %(default)s)",
+    )
     parser.add_argument("--json", default=str(DEFAULT_JSON), help="JSON output path")
     parser.add_argument(
         "--verified", default=str(DEFAULT_VERIFIED_MD), help="VERIFIED.md output path"
@@ -585,6 +800,10 @@ def main():
         ),
     )
     args = parser.parse_args()
+    if not 0 <= args.volume <= 100:
+        parser.error("--volume must be between 0 and 100")
+    if args.play_seconds < 0:
+        parser.error("--play-seconds must be >= 0")
 
     speaker = pick_speaker(args.ip)
     run_playback = not args.no_play
@@ -611,7 +830,14 @@ def main():
             # Any service with a household account (added), including added
             # anonymous services, is tested with that account.
             per_account = [
-                test_configured_service(speaker, entry, account, run_playback)
+                test_configured_service(
+                    speaker,
+                    entry,
+                    account,
+                    run_playback,
+                    playback_volume=args.volume,
+                    play_seconds=args.play_seconds,
+                )
                 for account in accounts
             ]
             entry["configured"] = True
@@ -642,7 +868,14 @@ def main():
             # synthetic account is passed explicitly to avoid re-fetching
             # the household accounts for every anonymous service.
             synthetic = ConfiguredMusicServiceAccount(entry["id"], 0, "")
-            result = test_configured_service(speaker, entry, synthetic, run_playback)
+            result = test_configured_service(
+                speaker,
+                entry,
+                synthetic,
+                run_playback,
+                playback_volume=args.volume,
+                play_seconds=args.play_seconds,
+            )
             entry["configured"] = False
             entry["accounts"] = 0
             entry["tests"] = result["tests"]
@@ -659,11 +892,6 @@ def main():
             entry["item_types"] = result.get("item_types", [])
 
         print("  %-28s %s" % (entry["name"], _summarize(entry)), flush=True)
-
-    try:
-        speaker.stop()
-    except Exception:  # pylint: disable=broad-except
-        pass
 
     now = datetime.datetime.now().isoformat(timespec="seconds")
     households = load_households(args.json)

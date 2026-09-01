@@ -82,53 +82,28 @@ streams are resolved by the player itself from the item's type and MIME, so no
 credentials ever leave the household (``x-sonosapi-stream:``, ``x-sonos-http:``,
 ``x-sonosapi-hls-static:``, ...).
 
-DirectControl services (Spotify, Pandora, Audible) use a *virtual
-line-in* session for the modern controller playback path: the speaker
-enters ``x-sonos-vli:...`` and its own cloud session drives the playback,
-rather than the player resolving a direct service resource.  ``play``
-handles this automatically — it enters the DirectControl session and posts
-the item to the speaker's control API (``loadContainer``), which is exactly
-what the desktop controller does:
+Spotify tracks are resolved MIME-aware to ``x-sonos-spotify:`` resources with
+the Spotify protocol information and selected account UDN in DIDL metadata.
+This is the same ordinary resource path whether ``play`` receives a browsed
+item or its raw item id, so equivalent calls do not silently choose different
+transport mechanisms::
 
-.. code:: python
+    browser.play(track)
+    browser.play(track.item_id)
 
-    browser = MusicServiceBrowser("Spotify")
-    root = browser.get_metadata()
-    # ... browse to a radio/playlist container ...
-    browser.play(container)          # plays it, app-less and headless
+This helper does **not** implement Spotify Connect/DirectControl virtual-line-in
+(``x-sonos-vli:``) playback. DirectControl has its own session lifecycle and
+protocol handling beyond ordinary music-service URI playback, so it is kept
+separate from this high-level playback path for now.
 
-    browser.play(track)              # individual Spotify tracks work too
+This choice follows the `August 16 live PR retest
+<https://github.com/SoCo/SoCo/pull/1010#issuecomment-5307134584>`_: the ordinary
+Spotify resource path worked across Play:5, Play:1, Playbar and Roam, while the
+DirectControl experiment did not work across the same environments.
 
-    # Pandora stations (program items) and Audible books (audiobook items)
-    # route the same way; their browse folders are browsed into, not played.
-
-Because an active DirectControl session is scoped to one service, ``play``
-compares the session's actual DirectControl application id (e.g.
-``spotify.connect.adapter`` vs ``com.audible.mobile.sonos``) before
-entering: if a *different* service's session is running (say Audible, and
-you ask for Spotify), the old session is ended and the requested one
-entered fresh; if the same service is already active and running, ``play``
-just posts the new container, which is how the desktop controller switches
-context without restarting the session; if the same service is active but
-*suspended*, the session is resumed first.  For services that report their
-session (Spotify), ``play`` also waits until the session is established
-before posting the container, and fails if it never becomes active, so the
-context switch cannot race the session start.
-
-You can drive the two halves yourself with
-:meth:`~soco.core.SoCo.play_direct_control` (enter the session) and
-:func:`~soco.music_services.browser.direct_control.load_container` (select the
-context), and end the session with
-:meth:`~soco.core.SoCo.end_direct_control_session`.  The verified
-DirectControl services and their ``loadContainer`` container types live in
-:mod:`soco.music_services.browser.direct_control` (``playlist.spotify.connect``,
-``program.pandora.connect``, ``audiobook.audible.connect``).  The control API
-is hosted on the group coordinator's HTTPS port, defaulting to 1443 (the
-desktop controller's value; ``SSLPort`` in ZoneGroupState) with the API
-version ``v1`` — documented defaults, not auto-discovered.  Pass ``port=``
-to :meth:`~soco.music_services.browser.MusicServiceBrowser.play` or
-:func:`~soco.music_services.browser.direct_control.load_container` to
-override the port when your speakers advertise a different one.
+Playable service containers must still be browsed into until a normal
+player-resolvable item is reached. This keeps the high-level playback helper
+on one predictable, provider-aware path.
 
 Presentation map and strings
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

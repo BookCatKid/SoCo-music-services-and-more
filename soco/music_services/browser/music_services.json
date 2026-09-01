@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-08-15T18:20:56",
+  "generated_at": "2026-08-14T18:57:25",
   "households": {
     "0c5378febe38": {
-      "generated_at": "2026-08-15T18:20:56",
+      "generated_at": "2026-08-14T18:57:25",
       "results": {
         "1099": {
           "accounts": 0,
@@ -59,7 +59,7 @@
               "account": 1,
               "tests": {
                 "browse": {
-                  "detail": "21 items",
+                  "detail": "5 items",
                   "status": "ok"
                 },
                 "metadata": {
@@ -76,7 +76,7 @@
           ],
           "tests": {
             "browse": {
-              "detail": "21 items",
+              "detail": "5 items",
               "status": "ok"
             },
             "metadata": {
@@ -605,7 +605,7 @@
               "account": 1,
               "tests": {
                 "browse": {
-                  "detail": "10 items",
+                  "detail": "9 items",
                   "status": "ok"
                 },
                 "metadata": {
@@ -621,9 +621,9 @@
                   },
                   "track": {
                     "detail": "PLAYING",
-                    "item_id": "catalog:track:asin:B0D73WV46B#erefid-2b34d1c8-84fa-43b1-916d-ded3fefeb217",
+                    "item_id": "catalog:track:asin:B00EQRPFGC#erefid-fefe4c82-24cb-483b-8856-c6858060cb6c",
                     "status": "ok",
-                    "title": "ALL MY LOVE"
+                    "title": "All Of Me"
                   }
                 },
                 "search": {
@@ -636,7 +636,7 @@
               "account": 2,
               "tests": {
                 "browse": {
-                  "detail": "12 items",
+                  "detail": "11 items",
                   "status": "ok"
                 },
                 "metadata": {
@@ -652,9 +652,9 @@
                   },
                   "track": {
                     "detail": "PLAYING",
-                    "item_id": "catalog:track:asin:B00O64D6DY#erefid-a01f26f6-75e4-4400-ab87-a29a2dede915",
+                    "item_id": "catalog:track:asin:B00136JD9Y#erefid-53f68e18-dcae-472e-a4dc-f15b967836be",
                     "status": "ok",
-                    "title": "Everybody Wants To Rule The World"
+                    "title": "We Didn't Start the Fire"
                   }
                 },
                 "search": {
@@ -666,7 +666,7 @@
           ],
           "tests": {
             "browse": {
-              "detail": "10 items",
+              "detail": "9 items",
               "status": "ok"
             },
             "metadata": {
@@ -682,9 +682,9 @@
               },
               "track": {
                 "detail": "PLAYING",
-                "item_id": "catalog:track:asin:B0D73WV46B#erefid-2b34d1c8-84fa-43b1-916d-ded3fefeb217",
+                "item_id": "catalog:track:asin:B00EQRPFGC#erefid-fefe4c82-24cb-483b-8856-c6858060cb6c",
                 "status": "ok",
-                "title": "ALL MY LOVE"
+                "title": "All Of Me"
               }
             },
             "search": {
@@ -1126,7 +1126,7 @@
               "account": 1,
               "tests": {
                 "browse": {
-                  "detail": "8 items",
+                  "detail": "7 items",
                   "status": "ok"
                 },
                 "metadata": {
@@ -1142,9 +1142,9 @@
                   },
                   "track": {
                     "detail": "PLAYING",
-                    "item_id": "episode:2848913",
+                    "item_id": "episode:2815537",
                     "status": "ok",
-                    "title": "Rafflande prim\u00e4rval i Michigan"
+                    "title": "Ebba Witt-Brattstr\u00f6m"
                   }
                 },
                 "search": {
@@ -1156,7 +1156,7 @@
           ],
           "tests": {
             "browse": {
-              "detail": "8 items",
+              "detail": "7 items",
               "status": "ok"
             },
             "metadata": {
@@ -1172,9 +1172,9 @@
               },
               "track": {
                 "detail": "PLAYING",
-                "item_id": "episode:2848913",
+                "item_id": "episode:2815537",
                 "status": "ok",
-                "title": "Rafflande prim\u00e4rval i Michigan"
+                "title": "Ebba Witt-Brattstr\u00f6m"
               }
             },
             "search": {
@@ -1228,9 +1228,9 @@
                 },
                 "playback": {
                   "program": {
-                    "detail": "TRANSITIONING",
+                    "detail": "PLAYING",
                     "item_id": "ST:160756695996334042",
-                    "status": "error",
+                    "status": "ok",
                     "title": "Shuffle"
                   }
                 },
@@ -1290,9 +1290,7 @@
         "239": {
           "accounts": 1,
           "configured": true,
-          "item_types": [
-            "audiobook"
-          ],
+          "item_types": [],
           "per_account_tests": [
             {
               "account": 1,
@@ -1302,17 +1300,10 @@
                   "status": "ok"
                 },
                 "metadata": {
-                  "detail": "soap:Server.ServiceUnknownError: unsupported Sonos entity tag reftitle (HTTP 500)",
-                  "status": "error"
+                  "detail": "no items",
+                  "status": "skipped"
                 },
-                "playback": {
-                  "audiobook": {
-                    "detail": "PLAYING",
-                    "item_id": "reftitle:B0FCZNK8HF_com",
-                    "status": "ok",
-                    "title": "Dopamine Kids"
-                  }
-                },
+                "playback": {},
                 "search": {
                   "detail": "category 'Books'",
                   "status": "ok"
@@ -1326,17 +1317,10 @@
               "status": "ok"
             },
             "metadata": {
-              "detail": "soap:Server.ServiceUnknownError: unsupported Sonos entity tag reftitle (HTTP 500)",
-              "status": "error"
+              "detail": "no items",
+              "status": "skipped"
             },
-            "playback": {
-              "audiobook": {
-                "detail": "PLAYING",
-                "item_id": "reftitle:B0FCZNK8HF_com",
-                "status": "ok",
-                "title": "Dopamine Kids"
-              }
-            },
+            "playback": {},
             "search": {
               "detail": "category 'Books'",
               "status": "ok"
@@ -1351,7 +1335,7 @@
           ],
           "tests": {
             "browse": {
-              "detail": "9 items",
+              "detail": "6 items",
               "status": "ok"
             },
             "construct": {
@@ -2396,7 +2380,9 @@
         "314": {
           "accounts": 1,
           "configured": true,
-          "item_types": [],
+          "item_types": [
+            "program"
+          ],
           "per_account_tests": [
             {
               "account": 1,
@@ -2406,10 +2392,15 @@
                   "status": "ok"
                 },
                 "metadata": {
-                  "detail": "no items",
-                  "status": "skipped"
+                  "detail": "getMediaMetadata response did not contain a result",
+                  "status": "error"
                 },
-                "playback": {},
+                "playback": {
+                  "program": {
+                    "detail": "UPnP Error 501 received: Action Failed from x.x.x.x",
+                    "status": "error"
+                  }
+                },
                 "search": {
                   "detail": "no search categories",
                   "status": "skipped"
@@ -2423,10 +2414,15 @@
               "status": "ok"
             },
             "metadata": {
-              "detail": "no items",
-              "status": "skipped"
+              "detail": "getMediaMetadata response did not contain a result",
+              "status": "error"
             },
-            "playback": {},
+            "playback": {
+              "program": {
+                "detail": "UPnP Error 501 received: Action Failed from x.x.x.x",
+                "status": "error"
+              }
+            },
             "search": {
               "detail": "no search categories",
               "status": "skipped"
@@ -3022,9 +3018,9 @@
                 "playback": {
                   "program": {
                     "detail": "PLAYING",
-                    "item_id": "channel-xtra:fb3114f1-5fed-f24c-da00-b7ad7c4706a2",
+                    "item_id": "channel-xtra:61893114-e9a5-b984-b7d7-cfdcb14e9369",
                     "status": "ok",
-                    "title": "Walking"
+                    "title": "Queens of Pop"
                   },
                   "stream": {
                     "detail": "PLAYING",
@@ -3034,9 +3030,9 @@
                   },
                   "track": {
                     "detail": "PLAYING",
-                    "item_id": "episode-audio:84265198-2e93-0006-927d-11d23ecadd3e",
+                    "item_id": "episode-audio:a38db32c-c599-6f12-3c33-c25d9dcb349c",
                     "status": "ok",
-                    "title": "Off Campus Songs"
+                    "title": "Move Over!"
                   }
                 },
                 "search": {
@@ -3058,9 +3054,9 @@
             "playback": {
               "program": {
                 "detail": "PLAYING",
-                "item_id": "channel-xtra:fb3114f1-5fed-f24c-da00-b7ad7c4706a2",
+                "item_id": "channel-xtra:61893114-e9a5-b984-b7d7-cfdcb14e9369",
                 "status": "ok",
-                "title": "Walking"
+                "title": "Queens of Pop"
               },
               "stream": {
                 "detail": "PLAYING",
@@ -3070,9 +3066,9 @@
               },
               "track": {
                 "detail": "PLAYING",
-                "item_id": "episode-audio:84265198-2e93-0006-927d-11d23ecadd3e",
+                "item_id": "episode-audio:a38db32c-c599-6f12-3c33-c25d9dcb349c",
                 "status": "ok",
-                "title": "Off Campus Songs"
+                "title": "Move Over!"
               }
             },
             "search": {

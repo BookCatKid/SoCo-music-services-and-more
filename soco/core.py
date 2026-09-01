@@ -873,35 +873,6 @@ class SoCo(_SocoSingletonBase):
         self.avTransport.EndDirectControlSession([("InstanceID", 0)])
 
     @only_on_master
-    def play_direct_control(self, provider, label="", title=None):
-        """Enter a DirectControl (virtual line-in) session for a music service.
-
-        Modern app-link services such as Spotify are played by the
-        controller through a "virtual line-in" session (top-level transport
-        URI ``x-sonos-vli:...``) driven by the service's own cloud session,
-        and the controller picks *what* plays by posting a container to the
-        speaker's control API. This method enters (or resumes) the
-        account's live DirectControl session;
-        call :func:`soco.music_services.browser.direct_control.load_container`
-        afterwards to select the actual context (radio, playlist, ...).
-
-        Args:
-            provider (str): The DirectControl provider label, e.g. ``spotify``.
-            label (str): An opaque session label. The speaker ignores it; the
-                real context is set separately via ``loadContainer``.
-            title (str, optional): A title shown in the controller (e.g. the
-                service name). Defaults to ``provider``.
-        """
-        from .music_services.browser.direct_control import (
-            direct_control_metadata,
-            direct_control_uri,
-        )
-
-        uri = direct_control_uri(self.uid, provider, label)
-        meta = direct_control_metadata(self.uid, provider, uri, title=title)
-        return self.play_uri(uri, meta=meta)
-
-    @only_on_master
     def seek(self, position=None, track=None):
         """Seek to a given position.
 
@@ -1896,24 +1867,6 @@ class SoCo(_SocoSingletonBase):
         return self.music_source == MUSIC_SRC_LINE_IN
 
     @property
-    def is_playing_direct_control(self):
-        """bool: Is the speaker playing from a DirectControl session?
-
-        DirectControl (aka virtual line-in) sessions are third-party
-        controlled streams such as Spotify Connect, Audible and Pandora.
-        During such a session the top-level transport URI is
-        ``x-sonos-vli:...`` while the current track's URI is the
-        service-specific resource (e.g. ``x-sonos-spotify:...``). The
-        DirectControl identity (``r:DirectControlClientID``,
-        ``r:DirectControlAccountID``, ``r:DirectControlIsSuspended``) is
-        only available through AVTransport events.
-        """
-        return self.music_source in (
-            MUSIC_SRC_DIRECT_CONTROL,
-            MUSIC_SRC_SPOTIFY_CONNECT,
-        )
-
-    @property
     def is_playing_tv(self):
         """bool: Is the playbar speaker input from TV?"""
         return self.music_source == MUSIC_SRC_TV
@@ -1938,10 +1891,6 @@ class SoCo(_SocoSingletonBase):
         *   ``'LINE_IN'`` -- speaker is playing music from line-in.
         *   ``'TV'`` -- speaker is playing input from TV.
         *   ``'AIRPLAY'`` -- speaker is playing from AirPlay.
-        *   ``'SPOTIFY_CONNECT'`` -- speaker is playing from a Spotify
-            DirectControl (Connect) session.
-        *   ``'DIRECT_CONTROL'`` -- speaker is playing from a DirectControl
-            session (e.g. Audible, Pandora) via a virtual line-in.
         *   ``'UNKNOWN'`` -- any other input.
 
         The strings above can be imported as ``MUSIC_SRC_LIBRARY``,
@@ -3126,7 +3075,6 @@ MUSIC_SRC_LINE_IN = "LINE_IN"
 MUSIC_SRC_TV = "TV"
 MUSIC_SRC_AIRPLAY = "AIRPLAY"
 MUSIC_SRC_SPOTIFY_CONNECT = "SPOTIFY_CONNECT"
-MUSIC_SRC_DIRECT_CONTROL = "DIRECT_CONTROL"
 MUSIC_SRC_UNKNOWN = "UNKNOWN"
 MUSIC_SRC_NONE = "NONE"
 
@@ -3146,8 +3094,6 @@ SOURCES = {
     r"^x-sonos-htastream:": MUSIC_SRC_TV,
     r"^x-sonos-vli:.*,airplay:": MUSIC_SRC_AIRPLAY,
     r"^x-sonos-vli:.*,spotify:": MUSIC_SRC_SPOTIFY_CONNECT,
-    # Any other virtual line-in: DirectControl sessions (e.g. Audible, Pandora)
-    r"^x-sonos-vli:": MUSIC_SRC_DIRECT_CONTROL,
 }
 
 # Soundbar product names

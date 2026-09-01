@@ -103,37 +103,6 @@ def test_event_parsing_linein():
     assert linein.title == "loadLineIn"
 
 
-def test_event_parsing_direct_control_variables():
-    """DirectControl variables (r:DirectControl*) in a LastChange event are
-    exposed with the namespace stripped and camel-cased.
-    """
-    # Mirror of a real AVTransport event during a Spotify DirectControl session
-    event_xml = (
-        '<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">'
-        "<e:property>"
-        "<LastChange>"
-        '&lt;Event xmlns="urn:schemas-upnp-org:metadata-1-0/AVT/" '
-        'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/"&gt;'
-        '&lt;InstanceID val="0"&gt;'
-        '&lt;TransportState val="PLAYING"/&gt;'
-        '&lt;CurrentTrackURI val="x-sonos-spotify:spotify:track:abc'
-        '?sid=12&amp;amp;flags=0&amp;amp;sn=63"/&gt;'
-        '&lt;r:DirectControlClientID val="spotify.connect.adapter"/&gt;'
-        '&lt;r:DirectControlIsSuspended val="0"/&gt;'
-        '&lt;r:DirectControlAccountID val=""/&gt;'
-        "&lt;/InstanceID&gt;"
-        "&lt;/Event&gt;"
-        "</LastChange>"
-        "</e:property>"
-        "</e:propertyset>"
-    )
-    result = parse_event_xml(event_xml)
-    assert result["transport_state"] == "PLAYING"
-    assert result["direct_control_client_id"] == "spotify.connect.adapter"
-    assert result["direct_control_is_suspended"] == "0"
-    assert result["direct_control_account_id"] == ""
-
-
 def test_event_parsing_null_value():
     """parse_event_xml must not raise AttributeError when a LastChange variable
     has neither a 'val' attribute nor text content (value is None).

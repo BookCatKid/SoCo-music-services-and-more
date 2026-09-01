@@ -1,6 +1,6 @@
 # Music-service verification
 
-Generated 2026-08-15T18:20:56. Results are merged across every recorded household and
+Generated 2026-08-14T18:57:25. Results are merged across every recorded household and
 the firmware they were recorded against; re-run
 ``python examples/verify_music_services.py`` to refresh.
 
@@ -52,7 +52,7 @@ Legend: ✅ verified working · ❌ broken · 🔒 account required · ⏭️ no
 | Sveriges Radio | Anonymous | 1 | ✅ | ✅ | ✅ | stream=✅, track=✅ | - |
 | Pandora | AppLink | 1 | ✅ | ✅ | ❌ | program=✅ | - |
 | storePlay | AppLink | 1 | 🔒 | 🔒 | 🔒 | ⏭️ | 🔒 not added |
-| Audible | AppLink | 1 | ✅ | ✅ | ❌ | audiobook=✅ | - |
+| Audible | AppLink | 1 | ✅ | ✅ | ⏭️ | ⏭️ | ⚠️ no playable items |
 | TuneIn | Anonymous | 1 | ✅ | ✅ | ✅ | stream=❌ | 🔒 not added |
 | CBC Radio & Music | Anonymous | 1 | ✅ | ⏭️ | ✅ | program=❌, stream=✅ | - |
 | Triple M | Anonymous | 1 | ✅ | ✅ | ✅ | stream=✅ | - |
@@ -80,7 +80,7 @@ Legend: ✅ verified working · ❌ broken · 🔒 account required · ⏭️ no
 | Radio Paradise | AppLink | 1 | ✅ | ⏭️ | ❌ | program=✅ | - |
 | iBroadcast | AppLink | 1 | 🔒 | 🔒 | 🔒 | ⏭️ | 🔒 not added |
 | Radioshop | AppLink | 1 | 🔒 | 🔒 | 🔒 | ⏭️ | 🔒 not added |
-| JazzGroove.org | AppLink | 1 | ✅ | ⏭️ | ⏭️ | ⏭️ | ⚠️ no playable items |
+| JazzGroove.org | AppLink | 1 | ✅ | ⏭️ | ❌ | program=❌ | - |
 | Convoy Network | Anonymous | 1 | ✅ | ⏭️ | ✅ | stream=✅ | - |
 | Yogi Tunes | AppLink | 1 | 🔒 | 🔒 | 🔒 | ⏭️ | 🔒 not added |
 | 80s80s - REAL 80s Radio | Anonymous | 1 | ✅ | ✅ | ✅ | stream=✅ | - |
