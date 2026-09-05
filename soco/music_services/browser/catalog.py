@@ -166,14 +166,15 @@ class PresentationMap:
             dict: ``{"menu_item_overrides": [...], "now_playing_ratings":
             [...], "display_types": {...}}`` with string ids resolved.
         """
-        resolve = lambda string_id: string_tables.resolve(string_id, lang)  # noqa: E731
+        def resolve(string_id):
+            return string_tables.resolve(string_id, lang)
 
         # Map a presentation-map string-id attribute to its resolved field
         # name.  Menu entries can carry separate prompt/success/failure/
         # in-progress texts, so each id is resolved into its own field rather
         # than collapsing them all into a single "text" (which would lose
         # information for entries carrying more than one id).
-        _TEXT_FIELDS = {
+        text_fields = {
             "StringId": "text",
             "PromptStringId": "prompt_text",
             "SuccessStringId": "success_text",
@@ -183,7 +184,7 @@ class PresentationMap:
 
         def resolved_override(override):
             result = dict(override)
-            for raw_key, text_key in _TEXT_FIELDS.items():
+            for raw_key, text_key in text_fields.items():
                 if result.get(raw_key):
                     result[text_key] = resolve(result[raw_key])
                     result["raw_{}".format(raw_key)] = result[raw_key]

@@ -96,11 +96,6 @@ This helper does **not** implement Spotify Connect/DirectControl virtual-line-in
 protocol handling beyond ordinary music-service URI playback, so it is kept
 separate from this high-level playback path for now.
 
-This choice follows the `August 16 live PR retest
-<https://github.com/SoCo/SoCo/pull/1010#issuecomment-5307134584>`_: the ordinary
-Spotify resource path worked across Play:5, Play:1, Playbar and Roam, while the
-DirectControl experiment did not work across the same environments.
-
 Playable service containers must still be browsed into until a normal
 player-resolvable item is reached. This keeps the high-level playback helper
 on one predictable, provider-aware path.
@@ -170,9 +165,9 @@ Notes
   Sonos sends to the players). Install the dependency explicitly with
   ``pip install soco[music-services]``.
 - The new API browses, searches and inspects metadata, and can play a browsed
-  item with :meth:`~soco.music_services.browser.MusicServiceBrowser.play`,
+  item with ``MusicServiceBrowser.play``,
   which builds the player-resolved URI and DIDL metadata and hands them to
-  :meth:`soco.core.SoCo.play_uri`.
+  ``SoCo.play_uri``.
 - Apple Music accounts already linked to your Sonos system work with the new
   API. Linking a *new* Apple Music account still has to be started from the
   Sonos mobile app; it cannot be completed from a third-party controller.

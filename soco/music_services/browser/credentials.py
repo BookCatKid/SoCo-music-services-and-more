@@ -1,5 +1,8 @@
 """Configured household music-service accounts and their decryption."""
 
+# The optional cryptography dependency is deliberately imported only when used.
+# pylint: disable=import-outside-toplevel
+
 from __future__ import unicode_literals
 
 import base64
@@ -223,13 +226,13 @@ def _aes_128_cbc_decrypt(ciphertext, key, iv):
     """
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    except ImportError:
+    except ImportError as exc:
         openssl = shutil.which("openssl")
         if not openssl:
             raise MusicServiceException(
                 "Browsing configured music-service accounts requires either "
                 "the 'cryptography' package or an OpenSSL executable"
-            )
+            ) from exc
         result = subprocess.run(
             [
                 openssl,
@@ -249,7 +252,7 @@ def _aes_128_cbc_decrypt(ciphertext, key, iv):
         if result.returncode != 0:
             raise MusicServiceException(
                 "AES-CBC decryption or PKCS#7 validation failed"
-            )
+            ) from exc
         return result.stdout
 
     decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
@@ -274,13 +277,13 @@ def _aes_128_cbc_encrypt(plaintext, key, iv):
     """
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    except ImportError:
+    except ImportError as exc:
         openssl = shutil.which("openssl")
         if not openssl:
             raise MusicServiceException(
                 "Managing configured music-service accounts requires either "
                 "the 'cryptography' package or an OpenSSL executable"
-            )
+            ) from exc
         result = subprocess.run(
             [
                 openssl,
@@ -297,7 +300,7 @@ def _aes_128_cbc_encrypt(plaintext, key, iv):
             check=False,
         )
         if result.returncode != 0:
-            raise MusicServiceException("AES-CBC encryption failed")
+            raise MusicServiceException("AES-CBC encryption failed") from exc
         return result.stdout
 
     padding_length = 16 - (len(plaintext) % 16)

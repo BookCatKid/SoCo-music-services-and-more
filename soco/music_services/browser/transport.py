@@ -54,9 +54,11 @@ class _ConfiguredSmapiClient:
 
     @property
     def capabilities(self):
+        """Return the provider capability bitmask."""
         return int(self.music_service.capabilities)
 
     def _credentials(self, parent, mode="normal"):
+        """Append credentials for the selected authentication mode."""
         credentials = XML.SubElement(parent, "{%s}credentials" % SMAPI_NS)
         if self.capabilities & (1 << 18) and self.device.uid:
             XML.SubElement(credentials, "{%s}zonePlayerId" % SMAPI_NS).text = (
@@ -400,6 +402,7 @@ class _ConfiguredSmapiClient:
         sort_order=None,
         sort_ascending=None,
     ):
+        """Return one page of provider metadata records."""
         fields = {"id": object_id, "index": str(index), "count": str(count)}
         if recursive:
             fields["recursive"] = "true"
@@ -444,6 +447,7 @@ class _ConfiguredSmapiClient:
         }
 
     def search(self, category_id, term, index=0, count=100):
+        """Search a provider category and return normalized records."""
         count = min(count, max(0, 1000 - index))
         try:
             root = self._request_with_refresh(
@@ -482,6 +486,7 @@ class _ConfiguredSmapiClient:
         }
 
     def get_media_metadata(self, object_id):
+        """Return provider metadata for one item id."""
         try:
             root = self._request_with_refresh("getMediaMetadata", {"id": object_id})
         except _BrowseSoapFault as fault:
@@ -620,7 +625,6 @@ class _ConfiguredSmapiClient:
             if self._is_expired_fault(fault):
                 raise MusicServiceAuthException(str(fault)) from fault
             raise fault.as_music_service_exception() from fault
-        return None
 
 
 class _BrowseSoapFault(Exception):

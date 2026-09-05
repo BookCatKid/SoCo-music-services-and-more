@@ -72,5 +72,6 @@ jobs:
         # Source-tree tests and editable installs do not catch missing
         # subpackages in the built artifact; the installed wheel is the
         # ground truth.
+        working-directory: /tmp
         run: |
           /tmp/wheel-venv/bin/python -c "import soco, soco.plugins, soco.music_services, soco.music_services.browser"

@@ -119,7 +119,7 @@ class AccountLink:
         service_name,
         auth_type,
         household_id,
-        account_type,
+        account_type,  # pylint: disable=redefined-outer-name
         registration_url,
         link_code,
         link_device_id="",
@@ -526,7 +526,7 @@ class MusicServiceAccountManager:
         callback = callback_path or self.callback_path
         app_link_error = None
         try:
-            root = self._smapi._request(
+            root = self._smapi._request(  # pylint: disable=protected-access
                 "getAppLink",
                 {
                     "householdId": self.household_id,
@@ -578,7 +578,7 @@ class MusicServiceAccountManager:
             )
 
         try:
-            root = self._smapi._request(
+            root = self._smapi._request(  # pylint: disable=protected-access
                 "getDeviceLinkCode",
                 {"householdId": self.household_id},
                 credential_mode="base",
@@ -620,7 +620,7 @@ class MusicServiceAccountManager:
                 expired or was already exchanged).
         """
         try:
-            root = self._smapi._request(
+            root = self._smapi._request(  # pylint: disable=protected-access
                 "getDeviceAuthToken",
                 {
                     "householdId": self.household_id,

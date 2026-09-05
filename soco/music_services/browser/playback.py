@@ -87,7 +87,7 @@ def normalize_item_type(item_type):
     """
     if not item_type:
         return ""
-    return str(item_type).split(".")[-1].lower()
+    return str(item_type).rsplit(".", 1)[-1].lower()
 
 
 def resolve_item(browser, item):
