@@ -374,8 +374,10 @@ class MusicServiceAccountManager:
         manager.set_nickname(added.account_udn, "Living Room")
 
     Re-linking passes the existing account's UDN to :meth:`commit_link`'s
-    ``replace_account_udn`` so only the credentials are swapped
-    (:meth:`replace_account_credentials`) instead of committing a duplicate.
+    ``replace_account_udn`` instead of committing a duplicate. Accounts with a
+    positive UID are refreshed in place; UID-zero and legacy records use
+    :meth:`replace_account_credentials`, whose returned UDN may differ from the
+    input UDN.
     """
 
     def __init__(
@@ -474,6 +476,21 @@ class MusicServiceAccountManager:
             if account_udn.startswith(prefix)
             else account_udn
         )
+
+    @staticmethod
+    def _canonical_account_udn(account_udn, household_id, service_id=None):
+        """Return and optionally validate a plaintext account UDN."""
+        if account_udn.startswith("2:"):
+            account_udn = _decrypt_account_payload(account_udn, household_id).decode(
+                "utf-8"
+            )
+        if service_id is not None:
+            expected_prefix = f"SA_RINCON{account_type(service_id)}_"
+            if not account_udn.startswith(expected_prefix):
+                raise MusicServiceException(
+                    "The replacement account UDN belongs to a different service"
+                )
+        return account_udn
 
     # ------------------------------------------------------------------
     # Link flow
@@ -675,17 +692,20 @@ class MusicServiceAccountManager:
     def commit_link(self, link, replace_account_udn=""):
         """Commit an authorized provider link to the household's players.
 
-        A fresh account is installed with ``AddOAuthAccountX``; passing
-        ``replace_account_udn`` swaps the credentials in place instead, with
-        ``ReplaceAccountX``. The player does not exchange the link code: the
-        provider's ``getDeviceAuthToken`` is called first and the resulting
-        credential package is wrapped in the household ``2:`` envelope.
+        A fresh account is installed with ``AddOAuthAccountX``. When
+        ``replace_account_udn`` is provided, accounts with a positive UID use
+        ``RefreshAccountCredentialsX`` to preserve their identity; UID-zero or
+        legacy records use ``ReplaceAccountX`` and may receive a new UDN. The
+        player does not exchange the link code: the provider's
+        ``getDeviceAuthToken`` is called first and the resulting credential
+        package is wrapped in the household ``2:`` envelope.
 
         Args:
             link (AccountLink): A link returned by :meth:`begin_link` whose
                 code the user has authorized.
-            replace_account_udn (str): When given, re-link in place: the
-                record keeps this UDN and only the credentials are swapped.
+            replace_account_udn (str): When given, re-link the identified
+                record. Positive-UID records retain this UDN; the player may
+                issue a different UDN when replacement is required.
 
         Returns:
             AddedAccount: The committed account record.
@@ -715,12 +735,35 @@ class MusicServiceAccountManager:
                 "committed here"
             )
         household = self._require_household(link.household_id)
+        existing_udn = ""
+        account_uid = 0
+        if replace_account_udn:
+            # Validate the mutation target before exchanging a potentially
+            # single-use provider link code.
+            existing_udn = self._canonical_account_udn(
+                replace_account_udn, household, service_id
+            )
+            existing = ConfiguredMusicServiceAccount(service_id, 0, existing_udn)
+            try:
+                account_uid = existing.account_uid
+            except MusicServiceException:
+                pass
         credential = self.get_device_auth_token(link)
         if replace_account_udn:
-            # Re-link path: the record keeps its UDN and only the credential
-            # package is swapped, exactly like the desktop's per-account
-            # replace.
-            return self.replace_account_credentials(replace_account_udn, credential)
+            if account_uid > 0:
+                self.refresh_account_credentials(
+                    account_uid, credential.auth_token, credential.private_key
+                )
+                return AddedAccount(
+                    service_id,
+                    self.music_service.service_name,
+                    existing_udn,
+                    provider_nickname=credential.nickname,
+                )
+            # Records without a usable UID cannot use
+            # RefreshAccountCredentialsX. Replace the existing record and
+            # return the UDN supplied by the player.
+            return self.replace_account_credentials(existing_udn, credential)
 
         user_id_hash = _normalize_user_id_hash(credential.user_id_hash_code)
         encoded_hash = (
@@ -773,10 +816,12 @@ class MusicServiceAccountManager:
     def replace_account_credentials(self, account_udn, credential):
         """Replace one existing account's stored credentials in place.
 
-        This is the re-link path: the record keeps its UDN and only the
-        credential package is swapped (``ReplaceAccountX``), so no duplicate
-        record is created. A ``2:`` blob ``account_udn`` is decoded first and
-        the legacy ID/password fields stay empty for OAuth services.
+        This is the re-link path: ``ReplaceAccountX`` replaces the identified
+        record, so no duplicate record is created. The player returns the
+        resulting record's ``NewAccountUDN``; current firmware may reissue the
+        UDN rather than preserve the input value. A ``2:`` blob ``account_udn``
+        is decoded first and the legacy ID/password fields stay empty for
+        OAuth services.
 
         Args:
             account_udn (str): The existing account's UDN, either the
@@ -786,7 +831,8 @@ class MusicServiceAccountManager:
                 package.
 
         Returns:
-            AddedAccount: The account record with its UDN unchanged.
+            AddedAccount: The replacement account record with the UDN returned
+                by the player.
         """
         service_id = int(self.music_service.service_id)
         if service_id <= 0:
@@ -802,11 +848,8 @@ class MusicServiceAccountManager:
                 "A complete credential package is required to replace an account"
             )
         household = self._require_household(self.household_id)
-        if account_udn.startswith("2:"):
-            account_udn = _decrypt_account_payload(account_udn, household).decode(
-                "utf-8"
-            )
-        self._call_player(
+        account_udn = self._canonical_account_udn(account_udn, household, service_id)
+        response = self._call_player(
             "ReplaceAccountX",
             {
                 "AccountUDN": _encrypt_account_payload(
@@ -823,13 +866,15 @@ class MusicServiceAccountManager:
                 "OAuthDeviceID": _encrypt_account_payload(
                     household.encode("utf-8"), household
                 ),
-                "NewAccountUDN": "",
             },
+        )
+        new_udn = _parse_account_udn(
+            XML.fromstring(response), "NewAccountUDN", household
         )
         return AddedAccount(
             service_id,
             self.music_service.service_name,
-            account_udn,
+            new_udn,
             provider_nickname=credential.nickname,
         )
 
@@ -1017,7 +1062,9 @@ class MusicServiceAccountManager:
     def refresh_account_credentials(self, account_uid, token, key):
         """Push a freshly obtained token/key pair into the stored account record.
 
-        This is the player-side persistence of a reauthorization, distinct
+        Credential values are wrapped in the household ``2:`` envelope, as
+        required by current firmware. This is the player-side persistence of a
+        reauthorization, distinct
         from ``SmapiClient.refresh_auth_token`` (which asks the provider for a
         fresh token without writing to the player).
 
@@ -1037,14 +1084,16 @@ class MusicServiceAccountManager:
             raise MusicServiceException(
                 "Both a token and a key are required to refresh credentials"
             )
-        self._require_household(self.household_id)
+        household = self._require_household(self.household_id)
         self._call_player(
             "RefreshAccountCredentialsX",
             {
                 "AccountType": str(account_type(service_id)),
                 "AccountUID": str(account_uid),
-                "AccountToken": token,
-                "AccountKey": key,
+                "AccountToken": _encrypt_account_payload(
+                    token.encode("utf-8"), household
+                ),
+                "AccountKey": _encrypt_account_payload(key.encode("utf-8"), household),
             },
         )
 
@@ -1079,7 +1128,7 @@ class MusicServiceAccountManager:
                     f"this household as {', '.join(map(str, names))}. The player "
                     "most likely rejected the duplicate commit (UPnP error "
                     "402: invalid arguments). Reauthorize the existing account "
-                    "in place (ReplaceAccountX) instead of adding a duplicate."
+                    "in place instead of adding a duplicate."
                 )
         return None
 
@@ -1195,18 +1244,30 @@ def _parse_add_response(music_service, response, household_id=""):
     account inventory; without it the raw value is preserved.
     """
     root = XML.fromstring(response)
-    udn_nodes = _children(root, "AccountUDN")
     nickname_nodes = _children(root, "AccountNickname")
-    udn = (udn_nodes[0].text or "").strip() if udn_nodes else ""
-    if not udn:
-        raise MusicServiceException(
-            "Player reported success but returned no AccountUDN"
-        )
-    if udn.startswith("2:") and household_id:
-        udn = _decrypt_account_payload(udn, household_id).decode("utf-8")
+    udn = _parse_account_udn(root, "AccountUDN", household_id)
     return AddedAccount(
         int(music_service.service_id),
         music_service.service_name,
         udn,
         (nickname_nodes[0].text or "").strip() if nickname_nodes else "",
     )
+
+
+def _parse_account_udn(root, field_name, household_id=""):
+    """Return one account UDN from a successful player SOAP response.
+
+    Account-writing actions may return the UDN either in canonical
+    ``SA_RINCON...`` form or wrapped in the household ``2:`` envelope. Output
+    arguments must be read from the response rather than sent as empty request
+    fields; doing the latter hides UDNs reissued by ``ReplaceAccountX``.
+    """
+    udn_nodes = _children(root, field_name)
+    udn = (udn_nodes[0].text or "").strip() if udn_nodes else ""
+    if not udn:
+        raise MusicServiceException(
+            f"Player reported success but returned no {field_name}"
+        )
+    if udn.startswith("2:") and household_id:
+        udn = _decrypt_account_payload(udn, household_id).decode("utf-8")
+    return udn

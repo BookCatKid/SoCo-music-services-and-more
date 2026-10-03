@@ -31,6 +31,7 @@ doc/_build
 .cache
 .pytest_cache
 coverage.xml
+/.music_services-verification.json
 
 # Mercurial
 /.hg/*

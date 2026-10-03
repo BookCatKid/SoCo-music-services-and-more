@@ -14,9 +14,10 @@ live household:
 
 Results are written to two files:
 
-* ``music_services.json`` -- the full service catalogue plus per-household
-  test results. Re-runs merge into the file keyed by a non-reversible
-  household hash, so one household's results never overwrite another's, and
+* ``.music_services-verification.json`` -- a local, ignored working file with
+  the full service catalogue plus per-household test results. Re-runs merge
+  into the file keyed by a non-reversible household hash, so one household's
+  results never overwrite another's, and
 * ``soco/music_services/browser/VERIFIED.md`` -- a human-readable matrix of
   what works and what does not yet work.
 
@@ -71,7 +72,7 @@ TYPES_TO_FIND = 4
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_VERIFIED_MD = REPO_ROOT / "soco" / "music_services" / "browser" / "VERIFIED.md"
-DEFAULT_JSON = REPO_ROOT / "soco" / "music_services" / "browser" / "music_services.json"
+DEFAULT_JSON = REPO_ROOT / ".music_services-verification.json"
 
 # Item types the playback builder understands (see browser/playback.py).
 PLAYABLE_TYPES = ("track", "stream", "program", "show", "episode", "audiobook")

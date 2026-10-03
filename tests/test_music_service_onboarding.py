@@ -30,6 +30,13 @@ SUCCESS = b"""\
 <AccountNickname>Person</AccountNickname>
 </u:AddOAuthAccountXResponse></s:Body></s:Envelope>"""
 
+REPLACE_SUCCESS = b"""\
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+<s:Body><u:ReplaceAccountXResponse
+    xmlns:u="urn:schemas-upnp-org:service:SystemProperties:1">
+<NewAccountUDN>SA_RINCON52231_X_#Svc52231-0-Token</NewAccountUDN>
+</u:ReplaceAccountXResponse></s:Body></s:Envelope>"""
+
 
 class FakeService:
     """MusicService-compatible descriptor used without network discovery."""
@@ -674,7 +681,7 @@ def test_commit_link_explains_existing_duplicate_account(monkeypatch):
     assert sp_calls[0][0] == "AddOAuthAccountX"
 
 
-def test_commit_link_replace_path_replaces_in_place(monkeypatch):
+def test_commit_link_relink_with_positive_uid_refreshes_in_place(monkeypatch):
     service = FakeService()
     manager = build_manager(monkeypatch, service)
     monkeypatch.setattr(
@@ -692,19 +699,63 @@ def test_commit_link_replace_path_replaces_in_place(monkeypatch):
         make_link(), replace_account_udn="SA_RINCON52231_X_#Svc52231-1-Token"
     )
 
-    # Re-linking an existing account mirrors the desktop controller's commit
-    # dispatcher: the record keeps its UDN and ReplaceAccountX swaps only the
-    # credential package, instead of committing a duplicate AddOAuthAccountX
-    # record (which the player rejects with 402).
-    assert sp_calls[0][0] == "ReplaceAccountX"
+    # A positive UID uses the identity-preserving refresh action instead of
+    # ReplaceAccountX, which may reissue the UDN with a zero UID.
+    assert sp_calls[0][0] == "RefreshAccountCredentialsX"
+    assert sp_calls[0][1]["AccountUID"] == "1"
     assert added.account_udn == "SA_RINCON52231_X_#Svc52231-1-Token"
     assert added.provider_nickname == "BookCatKid"
+
+
+def test_commit_link_relink_with_zero_uid_replaces_record(monkeypatch):
+    service = FakeService()
+    manager = build_manager(monkeypatch, service)
+    monkeypatch.setattr(
+        manager,
+        "get_device_auth_token",
+        lambda link: DeviceAuthCredential(
+            auth_token="BQBJ-fresh",
+            private_key="priv-key/1786401533373",
+            nickname="BookCatKid",
+        ),
+    )
+    sp_calls = patch_sp_call(monkeypatch, [REPLACE_SUCCESS])
+
+    added = manager.commit_link(
+        make_link(), replace_account_udn="SA_RINCON52231_X_#Svc52231-0-Token"
+    )
+
+    assert sp_calls[0][0] == "ReplaceAccountX"
+    assert added.account_udn == "SA_RINCON52231_X_#Svc52231-0-Token"
+    assert added.provider_nickname == "BookCatKid"
+
+
+def test_commit_link_rejects_relink_udn_for_another_service_before_exchange(
+    monkeypatch,
+):
+    service = FakeService()
+    manager = build_manager(monkeypatch, service)
+    exchange_calls = []
+    monkeypatch.setattr(
+        manager,
+        "get_device_auth_token",
+        lambda link: exchange_calls.append(link),
+    )
+    sp_calls = patch_sp_call(monkeypatch, [])
+
+    with pytest.raises(MusicServiceException, match="different service"):
+        manager.commit_link(
+            make_link(), replace_account_udn="SA_RINCON3079_X_#Svc3079-1-Token"
+        )
+
+    assert not exchange_calls
+    assert not sp_calls
 
 
 def test_replace_account_credentials_uses_native_replace_contract(monkeypatch):
     service = FakeService()
     manager = build_manager(monkeypatch, service)
-    sp_calls = patch_sp_call(monkeypatch, [SUCCESS])
+    sp_calls = patch_sp_call(monkeypatch, [REPLACE_SUCCESS])
     credential = DeviceAuthCredential(
         auth_token="BQBJ-fresh", private_key="priv-key/1786401533373"
     )
@@ -715,9 +766,8 @@ def test_replace_account_credentials_uses_native_replace_contract(monkeypatch):
 
     action, fields = sp_calls[0]
     assert action == "ReplaceAccountX"
-    # ReplaceAccountX's argument list matches the player's SystemProperties
-    # SCPD: AccountUDN, NewAccountID, NewAccountPassword, AccountToken,
-    # AccountKey, OAuthDeviceID, NewAccountUDN.
+    # ReplaceAccountX's input argument list matches the player's
+    # SystemProperties SCPD. NewAccountUDN is an output and must not be sent.
     assert list(fields) == [
         "AccountUDN",
         "NewAccountID",
@@ -725,13 +775,10 @@ def test_replace_account_credentials_uses_native_replace_contract(monkeypatch):
         "AccountToken",
         "AccountKey",
         "OAuthDeviceID",
-        "NewAccountUDN",
     ]
-    # OAuth-style services leave the legacy credential pair and the new UDN
-    # empty, exactly like the desktop's own replace commit.
+    # OAuth-style services leave the legacy credential pair empty.
     assert fields["NewAccountID"] == ""
     assert fields["NewAccountPassword"] == ""
-    assert fields["NewAccountUDN"] == ""
     # Credential values follow the AddOAuthAccountX envelope contract.
     assert browser._decrypt_account_payload(fields["AccountUDN"], "Sonos_hh") == (
         b"SA_RINCON52231_X_#Svc52231-1-Token"
@@ -747,15 +794,49 @@ def test_replace_account_credentials_uses_native_replace_contract(monkeypatch):
         browser._decrypt_account_payload(fields["OAuthDeviceID"], "Sonos_hh")
         == b"Sonos_hh"
     )
-    # ReplaceAccountX has no output arguments (SCPD); the existing UDN is
-    # reported unchanged.
-    assert added.account_udn == "SA_RINCON52231_X_#Svc52231-1-Token"
+    assert added.account_udn == "SA_RINCON52231_X_#Svc52231-0-Token"
+
+
+def test_replace_account_credentials_decrypts_returned_udn(monkeypatch):
+    service = FakeService()
+    manager = build_manager(monkeypatch, service)
+    new_udn = "SA_RINCON52231_X_#Svc52231-23-Token"
+    encrypted_udn = browser._encrypt_account_payload(
+        new_udn.encode("utf-8"), "Sonos_hh"
+    )
+    response = REPLACE_SUCCESS.replace(
+        b"SA_RINCON52231_X_#Svc52231-0-Token", encrypted_udn.encode("utf-8")
+    )
+    patch_sp_call(monkeypatch, [response])
+
+    added = manager.replace_account_credentials(
+        "SA_RINCON52231_X_#Svc52231-1-Token",
+        DeviceAuthCredential(auth_token="BQBJ-fresh", private_key="priv-key"),
+    )
+
+    assert added.account_udn == new_udn
+
+
+def test_replace_account_credentials_requires_returned_udn(monkeypatch):
+    service = FakeService()
+    manager = build_manager(monkeypatch, service)
+    response = REPLACE_SUCCESS.replace(
+        b"<NewAccountUDN>SA_RINCON52231_X_#Svc52231-0-Token</NewAccountUDN>",
+        b"",
+    )
+    patch_sp_call(monkeypatch, [response])
+
+    with pytest.raises(MusicServiceException, match="returned no NewAccountUDN"):
+        manager.replace_account_credentials(
+            "SA_RINCON52231_X_#Svc52231-1-Token",
+            DeviceAuthCredential(auth_token="BQBJ-fresh", private_key="priv-key"),
+        )
 
 
 def test_replace_account_credentials_normalizes_blob_udn(monkeypatch):
     service = FakeService()
     manager = build_manager(monkeypatch, service)
-    sp_calls = patch_sp_call(monkeypatch, [SUCCESS])
+    sp_calls = patch_sp_call(monkeypatch, [REPLACE_SUCCESS])
     blob = browser._encrypt_account_payload(
         b"SA_RINCON52231_X_#Svc52231-1-Token", "Sonos_hh"
     )
@@ -1006,8 +1087,14 @@ def test_refresh_credentials_uses_native_contract(monkeypatch):
     assert action == "RefreshAccountCredentialsX"
     assert fields["AccountType"] == str(account_type(37))
     assert fields["AccountUID"] == "7"
-    assert fields["AccountToken"] == "fresh-token"
-    assert fields["AccountKey"] == "fresh-key"
+    assert (
+        browser._decrypt_account_payload(fields["AccountToken"], "Sonos_hh")
+        == b"fresh-token"
+    )
+    assert (
+        browser._decrypt_account_payload(fields["AccountKey"], "Sonos_hh")
+        == b"fresh-key"
+    )
 
 
 def test_refresh_credentials_rejects_incomplete_pair_before_network(monkeypatch):

@@ -803,7 +803,7 @@ async function startLink(btn) {
     onboard.registrationUrl = data.registration_url;
     onboard.appUrl = data.app_url;
     const relinkNote = onboard.relinkUdn
-      ? '<p class="hint">Re-linking an existing account — its record keeps its identity and only the credentials are swapped (ReplaceAccountX).</p>'
+      ? '<p class="hint">Re-linking an existing account. Positive-UID records are refreshed in place; other records are replaced and may receive a new account UDN.</p>'
       : "";
     box.innerHTML = `
       <div class="msg ${data.standalone ? "ok" : "warn"}">
